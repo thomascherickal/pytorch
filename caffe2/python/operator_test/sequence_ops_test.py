@@ -1,14 +1,17 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
+
+
+
+
+
 from caffe2.python import core
-from hypothesis import given
+from functools import partial
+from hypothesis import given, settings
 import caffe2.python.hypothesis_test_util as hu
+import caffe2.python.serialized_test.serialized_test_util as serial
 import hypothesis.strategies as st
 import numpy as np
 import unittest
-from functools import partial
+import os
 
 
 def _gen_test_add_padding(with_pad_data=True,
@@ -98,12 +101,13 @@ def _gather_padding_ref(start_pad_width, end_pad_width, data, lengths):
     return (start_padding, end_padding)
 
 
-class TestSequenceOps(hu.HypothesisTestCase):
+class TestSequenceOps(serial.SerializedTestCase):
     @given(start_pad_width=st.integers(min_value=1, max_value=2),
            end_pad_width=st.integers(min_value=0, max_value=2),
            args=_gen_test_add_padding(with_pad_data=True),
            ret_lengths=st.booleans(),
            **hu.gcs)
+    @settings(deadline=1000)
     def test_add_padding(
         self, start_pad_width, end_pad_width, args, ret_lengths, gc, dc
     ):
@@ -189,6 +193,7 @@ class TestSequenceOps(hu.HypothesisTestCase):
            end_pad_width=st.integers(min_value=0, max_value=2),
            args=_gen_test_add_padding(with_pad_data=True),
            **hu.gcs)
+    @settings(deadline=10000)
     def test_gather_padding(self, start_pad_width, end_pad_width, args, gc, dc):
         lengths, data, start_padding, end_padding = args
         padded_data, padded_lengths = _add_padding_ref(
@@ -207,10 +212,11 @@ class TestSequenceOps(hu.HypothesisTestCase):
             reference=partial(_gather_padding_ref, start_pad_width, end_pad_width))
 
     @given(data=hu.tensor(min_dim=3, max_dim=3, dtype=np.float32,
-                          elements=st.floats(min_value=-np.inf,
+                          elements=hu.floats(min_value=-np.inf,
                                              max_value=np.inf),
                           min_value=1, max_value=10),
                           **hu.gcs)
+    @settings(deadline=10000)
     def test_reverse_packed_segs(self, data, gc, dc):
         max_length = data.shape[0]
         batch_size = data.shape[1]
@@ -241,13 +247,14 @@ class TestSequenceOps(hu.HypothesisTestCase):
             grad_reference=op_grad_ref)
 
     @given(data=hu.tensor(min_dim=1, max_dim=3, dtype=np.float32,
-                          elements=st.floats(min_value=-np.inf,
+                          elements=hu.floats(min_value=-np.inf,
                                              max_value=np.inf),
                           min_value=10, max_value=10),
            indices=st.lists(st.integers(min_value=0, max_value=9),
                             min_size=0,
                             max_size=10),
            **hu.gcs_cpu_only)
+    @settings(deadline=10000)
     def test_remove_data_blocks(self, data, indices, gc, dc):
         indices = np.array(indices)
 
@@ -272,6 +279,7 @@ class TestSequenceOps(hu.HypothesisTestCase):
                              min_size=0,
                              max_size=10),
            **hu.gcs_cpu_only)
+    @settings(deadline=1000)
     def test_find_duplicate_elements(self, elements, gc, dc):
         mapping = {
             0: "a",

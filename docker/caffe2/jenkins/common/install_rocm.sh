@@ -2,11 +2,14 @@
 
 set -ex
 
-[ -n "$ROCM_VERSION" ]
-
 install_ubuntu() {
     apt-get update
     apt-get install -y wget
+    apt-get install -y libopenblas-dev
+
+    # Need the libc++1 and libc++abi1 libraries to allow torch._C to load at runtime
+    apt-get install libc++1
+    apt-get install libc++abi1
 
     DEB_ROCM_REPO=http://repo.radeon.com/rocm/apt/debian
     # Add rocm repository
@@ -16,32 +19,51 @@ install_ubuntu() {
 
     DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-unauthenticated \
                    rocm-dev \
-                   rocm-libs \
                    rocm-utils \
                    rocfft \
                    miopen-hip \
-                   miopengemm \
                    rocblas \
-                   hipblas \
+                   hipsparse \
                    rocrand \
-                   rocm-profiler \
-                   cxlactivitylogger
+                   hipcub \
+                   rocthrust \
+                   rccl \
+                   rocprofiler-dev \
+                   roctracer-dev
 }
 
 install_centos() {
-    echo "Not implemented yet"
-    exit 1
+
+  yum update -y
+  yum install -y wget
+  yum install -y openblas-devel
+
+  yum install -y epel-release
+  yum install -y dkms kernel-headers-`uname -r` kernel-devel-`uname -r`
+
+  echo "[ROCm]" > /etc/yum.repos.d/rocm.repo
+  echo "name=ROCm" >> /etc/yum.repos.d/rocm.repo
+  echo "baseurl=http://repo.radeon.com/rocm/yum/rpm/" >> /etc/yum.repos.d/rocm.repo
+  echo "enabled=1" >> /etc/yum.repos.d/rocm.repo
+  echo "gpgcheck=0" >> /etc/yum.repos.d/rocm.repo
+
+  yum update -y
+
+  yum install -y \
+                   rocm-dev \
+                   rocm-utils \
+                   rocfft \
+                   miopen-hip \
+                   rocblas \
+                   hipsparse \
+                   rocrand \
+                   rccl \
+                   hipcub \
+                   rocthrust \
+                   rocprofiler-dev \
+                   roctracer-dev
 }
-
-install_hip_thrust() {
-    # Needed for now, will be replaced soon
-    git clone --recursive https://github.com/ROCmSoftwarePlatform/Thrust.git /data/Thrust
-    rm -rf /data/Thrust/thrust/system/cuda/detail/cub-hip
-    git clone --recursive https://github.com/ROCmSoftwarePlatform/cub-hip.git /data/Thrust/thrust/system/cuda/detail/cub-hip
-    cd /data/Thrust/thrust/system/cuda/detail/cub-hip && git checkout hip_port_1.7.4_caffe2 && cd -
-}
-
-
+ 
 # Install Python packages depending on the base OS
 if [ -f /etc/lsb-release ]; then
   install_ubuntu
@@ -51,5 +73,3 @@ else
   echo "Unable to determine OS..."
   exit 1
 fi
-
-install_hip_thrust

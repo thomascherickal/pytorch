@@ -3,9 +3,9 @@
 
 #include <cuda.h>
 #include <assert.h>
-#include "THCGeneral.h"
-#include "THCIntegerDivider.cuh"
-#include "THCTensor.h"
+#include <THC/THCGeneral.h>
+#include <THC/THCIntegerDivider.cuh>
+#include <THC/THCTensor.h>
 
 // Maximum number of dimensions allowed for cutorch
 #define MAX_CUTORCH_DIMS 25
@@ -28,7 +28,7 @@ struct TensorInfo {
   // reduction dim (allows you to calculate offsets of the reduction
   // slice)
   void reduceDim(int dim);
-  
+
   /*
   Updates the TensorInfo's dims, sizes, and strides to reflect a "collapse" of
   the info, possibly excluding the optional excludeDim. A "collapsed" version
@@ -73,7 +73,7 @@ TensorInfo<T, IndexType>::TensorInfo(T* p,
 template <typename T, typename IndexType>
 void
 TensorInfo<T, IndexType>::reduceDim(int dim) {
-  assert(dim < dims && dim >= 0);
+  TORCH_INTERNAL_ASSERT(dim < dims && dim >= 0);
   sizes[dim] = 1;
 }
 
@@ -81,7 +81,7 @@ template <typename T, typename IndexType>
 int
 TensorInfo<T, IndexType>::collapseDims(const int excludeDim) {
 
-  assert(excludeDim >= -1 && excludeDim < dims);
+  TORCH_INTERNAL_ASSERT(excludeDim >= -1 && excludeDim < dims);
 
   int stopDim = (excludeDim == -1) ? dims : excludeDim;
   int newIndex = -1;
@@ -98,7 +98,7 @@ TensorInfo<T, IndexType>::collapseDims(const int excludeDim) {
       sizes[newIndex] = sizes[oldIndex];
       strides[newIndex] = strides[oldIndex];
       ++oldIndex;
-      break; 
+      break;
     }
 
     // Collapses dims
@@ -106,7 +106,7 @@ TensorInfo<T, IndexType>::collapseDims(const int excludeDim) {
       if (sizes[oldIndex] == 1) {
         continue;
       }
-  
+
       if (strides[newIndex] == sizes[oldIndex] * strides[oldIndex]) {
         sizes[newIndex] *= sizes[oldIndex];
         strides[newIndex] = strides[oldIndex];
@@ -119,7 +119,7 @@ TensorInfo<T, IndexType>::collapseDims(const int excludeDim) {
 
     // Handles excludeDim being set (oldIndex == excludeDim)
     if (oldIndex != dims) {
-      
+
       // Preserves excluded dimension
       ++newIndex;
       sizes[newIndex] = sizes[oldIndex];
@@ -152,7 +152,7 @@ struct IndexToOffset {
   static __host__ __device__ IndexType get(
     IndexType linearId,
     const TensorInfo<T, IndexType>& info) {
-    
+
     IndexType offset = 0;
 
     // Uses static dims
@@ -162,7 +162,7 @@ struct IndexToOffset {
       offset += curDimOffset;
       linearId /= info.sizes[i];
     }
-    
+
     return offset + linearId * info.strides[0];
   }
 };

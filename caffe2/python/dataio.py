@@ -15,14 +15,15 @@ Examples of possible Readers and Writers:
 
 See `dataset.py` for an example of implementation.
 """
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
+
+
+
+
 
 from caffe2.python import core
 from caffe2.python.schema import Field, Struct, from_blob_list
 import numpy as np
+import time
 
 
 class Reader(object):
@@ -494,6 +495,27 @@ class ReaderWithTimeLimit(ReaderWithLimitBase):
             )
 
 
+class ReaderWithDelay(Reader):
+    """Test reader class that inserts a delay between reading batches."""
+
+    def __init__(self, reader, delay):
+        Reader.__init__(self, schema=reader._schema)
+        self.reader = reader
+        self.delay = delay
+
+    def setup_ex(self, global_init_net, global_finish_net):
+        self.reader.setup_ex(global_init_net, global_finish_net)
+
+    def read_ex(self, local_init_net, local_finish_net):
+        read_net = core.Net("reader_body")
+
+        def sleep_op(*args, **argd):
+            time.sleep(self.delay)
+
+        read_net.Python(sleep_op)([], [])
+        return ([read_net],) + self.reader.read(read_net)
+
+
 class CompositeReader(Reader):
     """
     Base class for a reader that wrap multiple readers, e.g., reading from
@@ -520,18 +542,30 @@ class CompositeReader(Reader):
         """
         Stops when one of the reader finished
         """
-        local_should_stop = local_init_net.ConstantFill(
-            [], shape=[], dtype=core.DataType.BOOL, value=False)
-        read_nets = []
+        # First, instantiate all the reader nets
         fields = []
+        stop_blobs = []
+        all_sub_read_nets = []
         for name, reader in zip(self._names, self._readers):
             sub_read_nets, should_stop, record = reader.read_record_ex(
                 local_init_net, local_finish_net)
-            stop_net = core.Net("{}_stop".format(name))
-            stop_net.Copy(should_stop, local_should_stop)
-            sub_read_nets.append(stop_net)
-            read_nets.extend(sub_read_nets)
+            stop_blobs.append(should_stop)
+            all_sub_read_nets.append(sub_read_nets)
             fields.extend(record.field_blobs())
+
+        read_nets = []
+        # Use the stop blob of the last reader as stop blob of composite reader.
+        local_should_stop = stop_blobs[-1]
+        for name, sub_read_nets, stop_blob in zip(self._names, all_sub_read_nets, stop_blobs):
+            read_nets.extend(sub_read_nets)
+            if stop_blob == local_should_stop:
+                # Skip adding stop net because Or([A, A], A) doesn't pass operator
+                # schema check
+                continue
+            stop_net = core.Net("{}_stop".format(name))
+            stop_net.Or([local_should_stop, stop_blob], local_should_stop)
+            read_nets.append(stop_net)
+
         return read_nets, local_should_stop, fields
 
     def reset(self, net):
@@ -562,8 +596,27 @@ class CompositeReaderBuilder(ReaderBuilder):
         return self._schema
 
     def setup(self, **kwargs):
-        for reader_builder in self._reader_builders:
-            reader_builder.setup(**kwargs)
+        data_finished_blobs = {}
+        # limiter is stateful; it can only be used once. Since
+        # CompositeReader stops when one of the reader stops,
+        # this is fine.
+        if "limiter" in kwargs:
+            limiter = kwargs.pop("limiter")
+        else:
+            limiter = None
+        for i, reader_builder in enumerate(self._reader_builders):
+            if i == len(self._reader_builders) - 1 and limiter is not None:
+                # The limiter must be applied to the last reader so that the
+                # batch counter is incremented only if every reader has data
+                kwargs["limiter"] = limiter
+            sub_reader_data_finished_blobs = reader_builder.setup(**kwargs)
+            overlapping_keys = set(data_finished_blobs.keys()) & set(sub_reader_data_finished_blobs.keys())
+            overlapping_values = set(data_finished_blobs.values()) & set(sub_reader_data_finished_blobs.values())
+            assert overlapping_keys == set(), "Overlapping keys: {}".format(overlapping_keys)
+            assert overlapping_values == set(), "Overlapping values: {}".format(overlapping_values)
+            data_finished_blobs.update(sub_reader_data_finished_blobs)
+
+        return data_finished_blobs
 
     def new_reader(self, **kwargs):
         readers = []

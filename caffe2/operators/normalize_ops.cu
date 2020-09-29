@@ -1,3 +1,5 @@
+#include <algorithm>
+
 #include <cub/block/block_reduce.cuh>
 
 #include "caffe2/core/context_gpu.h"
@@ -11,7 +13,8 @@ __global__ void NormalizeKernel(
     const int n,
     const int sf,
     const float* xData,
-    float* yData) {
+    float* yData,
+    const float kEps) {
   typedef cub::BlockReduce<float, CAFFE_CUDA_NUM_THREADS> BlockReduce;
   __shared__ BlockReduce::TempStorage temp_storage;
 
@@ -27,14 +30,13 @@ __global__ void NormalizeKernel(
     float reduce_result = BlockReduce(temp_storage).Sum(sum);
 
     if (threadIdx.x == 0) {
-      norm = sqrt(reduce_result);
+      norm = sqrtf(reduce_result);
+      norm = fmaxf(norm, kEps);
     }
     __syncthreads();
-    if (norm != 0) {
-      for (int j = threadIdx.x; j < m; j += blockDim.x) {
-        const auto index = base + j * sf;
-        yData[index] = xData[index] / norm;
-      }
+    for (int j = threadIdx.x; j < m; j += blockDim.x) {
+      const auto index = base + j * sf;
+      yData[index] = xData[index] / norm;
     }
   }
 }
@@ -45,7 +47,8 @@ __global__ void NormalizeGradientKernel(
     const int SF,
     const float* in_mat,
     const float* grad_out_mat,
-    float* grad_mat) {
+    float* grad_mat,
+    const float kEps) {
   typedef cub::BlockReduce<float, CAFFE_CUDA_NUM_THREADS> BlockReduce;
   __shared__ BlockReduce::TempStorage temp_storage_sum;
   __shared__ BlockReduce::TempStorage temp_storage_norm;
@@ -66,8 +69,9 @@ __global__ void NormalizeGradientKernel(
 
     if (threadIdx.x == 0) {
       row_sum = reduce_result;
-      row_norm = sqrt(reduce_norm);
-      row_norm_3 = pow(row_norm, 3);
+      row_norm = sqrtf(reduce_norm);
+      row_norm = fmaxf(row_norm, kEps);
+      row_norm_3 = powf(row_norm, 3);
     }
     __syncthreads();
     for (int j = threadIdx.x; j < N; j += blockDim.x) {
@@ -87,10 +91,10 @@ void NormalizeOp<float, CUDAContext>::DoNormalize(
     const int n,
     const int sf) {
   NormalizeKernel<<<
-      min(n, CAFFE_MAXIMUM_NUM_BLOCKS),
+      std::min(n, CAFFE_MAXIMUM_NUM_BLOCKS),
       CAFFE_CUDA_NUM_THREADS,
       0,
-      context_.cuda_stream()>>>(m, n, sf, xData, yData);
+      context_.cuda_stream()>>>(m, n, sf, xData, yData, kEps_);
 }
 
 template <>
@@ -103,14 +107,20 @@ bool NormalizeGradientOp<float, CUDAContext>::RunOnDevice() {
   const auto canonical_axis =
       X.canonical_axis_index(OperatorBase::GetSingleArgument<int>("axis", -1));
   int N = X.dim32(canonical_axis);
-  int M = X.size() / N;
+  int M = X.numel() / N;
   const int SF = X.size_from_dim(canonical_axis + 1);
   NormalizeGradientKernel<<<
-      min(M, CAFFE_MAXIMUM_NUM_BLOCKS),
+      std::min(M, CAFFE_MAXIMUM_NUM_BLOCKS),
       CAFFE_CUDA_NUM_THREADS,
       0,
       context_.cuda_stream()>>>(
-      M, N, SF, X.data<float>(), dY.data<float>(), dX->mutable_data<float>());
+      M,
+      N,
+      SF,
+      X.data<float>(),
+      dY.data<float>(),
+      dX->template mutable_data<float>(),
+      kEps_);
   return true;
 }
 
@@ -131,7 +141,7 @@ __global__ void NormalizeL1Kernel(
     __shared__ float norm;
     for (int j = threadIdx.x; j < m; j += blockDim.x) {
       const auto x_ij = xData[base + j * sf];
-      sum += abs(x_ij);
+      sum += fabsf(x_ij);
     }
     float reduce_result = BlockReduce(temp_storage).Sum(sum);
 
@@ -157,7 +167,7 @@ void NormalizeL1Op<float, CUDAContext>::DoNormalize(
     const int n,
     const int sf) {
   NormalizeL1Kernel<<<
-      min(n, CAFFE_MAXIMUM_NUM_BLOCKS),
+      std::min(n, CAFFE_MAXIMUM_NUM_BLOCKS),
       CAFFE_CUDA_NUM_THREADS,
       0,
       context_.cuda_stream()>>>(m, n, sf, xData, yData);

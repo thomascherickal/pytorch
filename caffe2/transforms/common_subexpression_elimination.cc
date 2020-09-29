@@ -2,7 +2,7 @@
 
 #include "caffe2/core/common.h"
 #include "caffe2/core/net.h"
-#include "caffe2/proto/caffe2.pb.h"
+#include "caffe2/proto/caffe2_pb.h"
 
 namespace caffe2 {
 
@@ -58,7 +58,7 @@ bool CommonSubexpressionEliminationTransform::PatternRule(
     const std::vector<int>& subgraph,
     int idx) {
   if (subgraph.size() == 0) {
-    if (IsWhitelisted(g.node(idx).op.type()))
+    if (IsAllowed(g.node(idx).op.type()))
       return true;
     return false;
   }

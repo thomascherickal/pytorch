@@ -9,9 +9,9 @@
 
 #include "caffe2/core/timer.h"
 #include "caffe2/core/workspace.h"
-#include "caffe2/proto/caffe2.pb.h"
+#include "caffe2/proto/caffe2_pb.h"
 
-CAFFE2_DEFINE_bool(
+C10_DEFINE_bool(
     caffe2_handle_executor_threads_exceptions,
     false,
     "If used we will handle exceptions in executor threads. "
@@ -21,10 +21,40 @@ namespace caffe2 {
 
 namespace {
 
+class ExceptionWrapper {
+ public:
+  ExceptionWrapper() : hasException_(false) {}
+  explicit ExceptionWrapper(const std::exception& ex)
+      : hasException_(true), exceptionMsg_(ex.what()) {
+#ifdef CAFFE2_USE_EXCEPTION_PTR
+    exception_ = std::current_exception();
+#endif
+  }
+
+  void rethrowException() {
+#ifdef CAFFE2_USE_EXCEPTION_PTR
+    std::rethrow_exception(exception_);
+#else
+    CAFFE_THROW(exceptionMsg_);
+#endif
+  }
+
+  operator bool() {
+    return hasException_;
+  }
+
+ private:
+  bool hasException_;
+#ifdef CAFFE2_USE_EXCEPTION_PTR
+  std::exception_ptr exception_;
+#endif
+  std::string exceptionMsg_;
+};
+
 struct NetDefInfo {
   const NetDef* netDef;
   // in order to keep the "override existing nets" on the top-level workflow,
-  // we need to makr the nets that already exist so that we can override them
+  // we need to mark the nets that already exist so that we can override them
   // exactly once.
   bool needsOverride;
 };
@@ -98,21 +128,23 @@ std::function<bool(int64_t)> getContinuationTest(
   }
 };
 
-// if the blob doesn't exist or is not initiaized, return false
+// if the blob doesn't exist or is not initialized, return false
 inline bool getShouldStop(const Blob* b) {
-  if (!b || !b->meta().id()) { // not exist or uninitialized
+  if (!b ||
+      b->meta().id() ==
+          TypeIdentifier::uninitialized()) { // not exist or uninitialized
     return false;
   }
 
   const auto& t = b->Get<TensorCPU>();
-  CAFFE_ENFORCE(t.IsType<bool>() && t.size() == 1, "expects a scalar boolean");
+  CAFFE_ENFORCE(t.IsType<bool>() && t.numel() == 1, "expects a scalar boolean");
   return *(t.template data<bool>());
 }
 
 /**
  * Injects a blob named 'GLOBAL_WORKSPACE_ID' for each workspace, only if
  * another blob named 'NODE_ID' is present. 'NODE_ID' blob can be used in a
- * distribued run and in this case 'GLOBAL_WORKSPACE_ID' can be used across
+ * distributed run and in this case 'GLOBAL_WORKSPACE_ID' can be used across
  * machines for other purposes (e.g. to support model parallelism). Essentially,
  * 'GLOBAL_WORKSPACE_ID' is an identifier for a workspace that is unique across
  * all 'NODE_ID's.
@@ -124,7 +156,7 @@ struct WorkspaceIdInjector {
   void InjectWorkspaceId(Workspace* workspace) {
     if (workspace->HasBlob(NODE_ID)) {
       Blob* node_id_blob = workspace->GetBlob(NODE_ID);
-      TensorCPU node_id_tensor = node_id_blob->template Get<TensorCPU>();
+      const TensorCPU& node_id_tensor = node_id_blob->template Get<TensorCPU>();
       int node_id = node_id_tensor.template data<int32_t>()[0];
       CAFFE_ENFORCE(
           seq_ < (1 << 16),
@@ -132,7 +164,7 @@ struct WorkspaceIdInjector {
       int32_t global_ws_id = (seq_++) + (static_cast<int32_t>(node_id) << 16);
       Blob* global_ws_id_blob = workspace->CreateLocalBlob(GLOBAL_WORKSPACE_ID);
       TensorCPU* global_ws_id_tensor =
-          global_ws_id_blob->template GetMutable<TensorCPU>();
+          BlobGetMutableTensor(global_ws_id_blob, CPU);
       global_ws_id_tensor->Resize();
       global_ws_id_tensor->template mutable_data<int32_t>()[0] = global_ws_id;
       VLOG(1) << "Adding " << GLOBAL_WORKSPACE_ID << " = " << global_ws_id;
@@ -164,7 +196,7 @@ struct CompiledExecutionStep;
  * ExecuteStepRecursive will call call compiled() once before the given
  * execution step is run and keep it alive for the length of its execution.
  * This means that, for steps with create_workspace=true, a child workspace
- * will be created everytime the step is executed, and destroyed right
+ * will be created every time the step is executed, and destroyed right
  * afterwards.
  */
 struct ExecutionStepWrapper {
@@ -222,6 +254,8 @@ struct ExecutionStepWrapper {
     }
     return guard;
   }
+
+  void Cancel();
 
  private:
   std::unique_ptr<CompiledExecutionStep> doCompile();
@@ -321,6 +355,24 @@ struct CompiledExecutionStep {
     };
   }
 
+  // Cancel attempts to cancel the running nets in a best effort way. If the net
+  // or op type does IO and doesn't implement cancellation it may not be
+  // possible to cancel leading to execution getting stuck on error.
+  void Cancel() {
+    for (auto& substep : reportSubsteps) {
+      substep->Cancel();
+    }
+    for (auto& substep : recurringSubsteps) {
+      substep->Cancel();
+    }
+    for (auto& net : networks) {
+      net->Cancel();
+    }
+    if (reportNet) {
+      reportNet->Cancel();
+    }
+  }
+
   const ExecutionStep* step;
   Workspace* workspace;
   vector<std::shared_ptr<ExecutionStepWrapper>> reportSubsteps;
@@ -336,6 +388,12 @@ struct CompiledExecutionStep {
  private:
   std::unique_ptr<Workspace> localWorkspace_;
 };
+
+void ExecutionStepWrapper::Cancel() {
+  if (compiledStep_) {
+    compiledStep_->Cancel();
+  }
+}
 
 std::unique_ptr<CompiledExecutionStep> ExecutionStepWrapper::doCompile() {
   return std::unique_ptr<CompiledExecutionStep>(new CompiledExecutionStep(
@@ -361,7 +419,7 @@ bool ExecuteStepRecursive(ExecutionStepWrapper& stepWrapper) {
 
   std::unique_ptr<Reporter> reporter;
   if (step.has_report_net() || compiledStep->reportSubsteps.size() > 0) {
-    reporter = caffe2::make_unique<Reporter>();
+    reporter = std::make_unique<Reporter>();
     auto* reportNet = compiledStep->reportNet;
     if (reportNet) {
       VLOG(1) << "Starting reporter net";
@@ -403,7 +461,7 @@ bool ExecuteStepRecursive(ExecutionStepWrapper& stepWrapper) {
 
         std::atomic<int> next_substep{0};
         std::mutex exception_mutex;
-        string first_exception;
+        ExceptionWrapper first_exception;
         auto worker = [&]() {
           auto num_substeps = compiledStep->recurringSubsteps.size();
           int substep_id = next_substep++ % num_substeps;
@@ -417,11 +475,13 @@ bool ExecuteStepRecursive(ExecutionStepWrapper& stepWrapper) {
             }
           } catch (const std::exception& ex) {
             std::lock_guard<std::mutex> guard(exception_mutex);
-            if (!first_exception.size()) {
-              first_exception = GetExceptionString(ex);
-              LOG(ERROR) << "Parallel worker exception:\n" << first_exception;
+            if (!first_exception) {
+              first_exception = ExceptionWrapper(ex);
+              LOG(ERROR) << "Parallel worker exception:\n"
+                         << c10::GetExceptionString(ex);
             }
             compiledStep->gotFailure = true;
+            compiledStep->Cancel();
             if (!FLAGS_caffe2_handle_executor_threads_exceptions) {
               // In complex plans other threads might get stuck if another
               // one fails. So we let exception to go out of thread which
@@ -437,7 +497,7 @@ bool ExecuteStepRecursive(ExecutionStepWrapper& stepWrapper) {
         if (step.has_num_concurrent_instances()) {
           numThreads *= step.num_concurrent_instances();
         }
-        for (int64_t i = 0; i < numThreads; ++i) {
+        for (size_t i = 0; i < numThreads; ++i) {
           threads.emplace_back(worker);
         }
         for (auto& thread : threads) {
@@ -445,10 +505,8 @@ bool ExecuteStepRecursive(ExecutionStepWrapper& stepWrapper) {
         }
         if (compiledStep->gotFailure) {
           LOG(ERROR) << "One of the workers failed.";
-          if (first_exception.size()) {
-            CAFFE_THROW(
-                "One of the workers died with an unhandled exception ",
-                first_exception);
+          if (first_exception) {
+            first_exception.rethrowException();
           }
           return false;
         }
@@ -473,22 +531,25 @@ bool ExecuteStepRecursive(ExecutionStepWrapper& stepWrapper) {
 }
 
 #undef CHECK_SHOULD_STOP
-}
+} // namespace
 
 bool RunPlanOnWorkspace(
     Workspace* ws,
     const PlanDef& plan,
     ShouldContinue shouldContinue) {
-  LOG(INFO) << "Started executing plan.";
+  LOG(INFO) << "Started executing plan " << plan.name();
   if (plan.execution_step_size() == 0) {
     LOG(WARNING) << "Nothing to run - did you define a correct plan?";
     // We will do nothing, but the plan is still legal so we will return true.
     return true;
   }
-  LOG(INFO) << "Initializing networks.";
+  LOG(INFO) << "Initializing networks for plan " << plan.name();
 
   NetDefMap net_defs;
   for (const NetDef& net_def : plan.network()) {
+    LOG(INFO) << "Processing net '" << net_def.name() << "', type: '"
+              << net_def.type() << "', #ops: " << net_def.op_size()
+              << ", num_workers: " << net_def.num_workers();
     CAFFE_ENFORCE(
         net_defs.count(net_def.name()) == 0,
         "Your plan contains networks of the same name \"",
@@ -508,19 +569,12 @@ bool RunPlanOnWorkspace(
       LOG(ERROR) << "Failed initializing step " << step.name();
       return false;
     }
-    LOG(INFO) << "Step " << step.name() << " took " << step_timer.Seconds()
-              << " seconds.";
+    LOG(INFO) << "Step " << step.name() << " in plan " << plan.name()
+              << " took " << step_timer.Seconds() << " seconds.";
   }
-  float exec_time = plan_timer.Seconds();
-
-#ifndef CAFFE2_MOBILE
-  PlanExecutionTime plan_stat(plan.name());
-  CAFFE_EVENT(
-      plan_stat, plan_execution_time_ns, (long)(exec_time * 1000000000));
-#endif // CAFFE2_MOBILE
-
-  LOG(INFO) << "Total plan took " << exec_time << " seconds.";
-  LOG(INFO) << "Plan executed successfully.";
+  LOG(INFO) << "Total plan " << plan.name() << " took " << plan_timer.Seconds()
+            << " seconds.";
+  LOG(INFO) << "Plan " << plan.name() << " executed successfully.";
   return true;
 }
-}
+} // namespace caffe2

@@ -1,64 +1,104 @@
-IF (MSVC)
-  IF (MSVC_VERSION LESS 1911)
+if(MSVC)
+  if(MSVC_VERSION LESS 1911)
     return()
-  ENDIF()
-ENDIF(MSVC)
+  endif()
+endif(MSVC)
 
-ADD_EXECUTABLE(scalar_test scalar_test.cpp)
-target_link_libraries(scalar_test ATen_cpu)
+list(APPEND ATen_CPU_TEST_SRCS
+  ${CMAKE_CURRENT_SOURCE_DIR}/scalar_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/apply_utils_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/basic.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/atest.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/Dimname_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/Dict_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/NamedTensor_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/half_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/broadcast_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/wrapdim_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/dlconvertor_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/native_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/scalar_tensor_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/test_parallel.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/undefined_tensor_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/verify_api_visibility.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/thread_init_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/weakref_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/quantized_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/extension_backend_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/xla_tensor_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/tensor_iterator_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/math_kernel_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/memory_overlapping_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/cpu_generator_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/pow_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/variant_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/reduce_ops_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/memory_format_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/cpu_rng_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/ivalue_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/vmap_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/type_test.cpp)
 
-ADD_EXECUTABLE(apply_utils_test apply_utils_test.cpp)
-target_link_libraries(apply_utils_test ATen_cpu)
-
-ADD_EXECUTABLE(basic basic.cpp)
-target_link_libraries(basic ATen_cpu)
-
-add_executable(atest atest.cpp)
-target_link_libraries(atest ATen_cpu)
-
-add_executable(broadcast_test broadcast_test.cpp)
-target_link_libraries(broadcast_test ATen_cpu)
-
-add_executable(wrapdim_test wrapdim_test.cpp)
-target_link_libraries(wrapdim_test ATen_cpu)
-
-add_executable(dlconvertor_test dlconvertor_test.cpp)
-target_link_libraries(dlconvertor_test ATen_cpu)
-
-add_executable(native_test native_test.cpp)
-target_link_libraries(native_test ATen_cpu)
-
-add_executable(scalar_tensor_test scalar_tensor_test.cpp)
-target_link_libraries(scalar_tensor_test ATen_cpu)
-
-add_executable(test_parallel test_parallel.cpp)
-target_link_libraries(test_parallel ATen_cpu)
-
-add_executable(undefined_tensor_test undefined_tensor_test.cpp)
-target_link_libraries(undefined_tensor_test ATen_cpu)
-
-add_executable(verify_api_visibility verify_api_visibility.cpp)
-target_link_libraries(verify_api_visibility ATen_cpu)
-
-add_executable(tbb_init_test tbb_init_test.cpp)
-target_link_libraries(tbb_init_test ATen_cpu)
-
-if(NOT NO_CUDA OR WITH_ROCM)
-  torch_cuda_based_add_executable(integer_divider_test integer_divider_test.cu)
-  target_link_libraries(integer_divider_test ATen_cpu ATen_cuda_library)
+list(APPEND ATen_CUDA_TEST_SRCS
+  ${CMAKE_CURRENT_SOURCE_DIR}/cuda_atomic_ops_test.cu
+  ${CMAKE_CURRENT_SOURCE_DIR}/cuda_complex_test.cu
+  ${CMAKE_CURRENT_SOURCE_DIR}/cuda_complex_math_test.cu
+  ${CMAKE_CURRENT_SOURCE_DIR}/cuda_integer_divider_test.cu
+  ${CMAKE_CURRENT_SOURCE_DIR}/cuda_apply_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/cuda_stream_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/cuda_half_test.cu
+  ${CMAKE_CURRENT_SOURCE_DIR}/cuda_distributions_test.cu
+  ${CMAKE_CURRENT_SOURCE_DIR}/cuda_optional_test.cu
+  ${CMAKE_CURRENT_SOURCE_DIR}/cuda_packedtensoraccessor_test.cu
+  ${CMAKE_CURRENT_SOURCE_DIR}/cuda_vectorized_test.cu
+  ${CMAKE_CURRENT_SOURCE_DIR}/cuda_dlconvertor_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/cuda_generator_test.cu)
+if(CAFFE2_USE_CUDNN)
+  list(APPEND ATen_CUDA_TEST_SRCS
+    ${CMAKE_CURRENT_SOURCE_DIR}/cuda_cudnn_test.cpp)
 endif()
 
-if(NOT NO_CUDA OR WITH_ROCM)
-  torch_cuda_based_add_executable(cuda_rng_test cuda_rng_test.cpp)
-  target_link_libraries(cuda_rng_test ATen_cpu ATen_cuda_library)
+list(APPEND ATen_HIP_TEST_SRCS
+  ${CMAKE_CURRENT_SOURCE_DIR}/hip/hip_complex_test.hip
+  ${CMAKE_CURRENT_SOURCE_DIR}/hip/hip_complex_math_test.hip
+  ${CMAKE_CURRENT_SOURCE_DIR}/hip/hip_integer_divider_test.hip
+  ${CMAKE_CURRENT_SOURCE_DIR}/hip/hip_apply_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/hip/hip_half_test.hip
+  ${CMAKE_CURRENT_SOURCE_DIR}/hip/hip_distributions_test.hip
+  ${CMAKE_CURRENT_SOURCE_DIR}/hip/hip_optional_test.hip
+  ${CMAKE_CURRENT_SOURCE_DIR}/hip/hip_packedtensoraccessor_test.hip
+  ${CMAKE_CURRENT_SOURCE_DIR}/hip/hip_vectorized_test.hip
+  ${CMAKE_CURRENT_SOURCE_DIR}/hip/hip_dlconvertor_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/hip/hip_generator_test.hip)
+# TODO: fix and enable these
+#  ${CMAKE_CURRENT_SOURCE_DIR}/hip/hip_tensor_interop_test.cpp
+#  ${CMAKE_CURRENT_SOURCE_DIR}/hip/hip_stream_test.cpp
+
+list(APPEND ATen_VULKAN_TEST_SRCS
+  ${CMAKE_CURRENT_SOURCE_DIR}/vulkan_api_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/vulkan_test.cpp)
+
+list(APPEND ATen_MOBILE_TEST_SRCS
+  ${CMAKE_CURRENT_SOURCE_DIR}/cpu_caching_allocator_test.cpp)
+
+list(APPEND ATen_VEC256_TEST_SRCS
+  ${CMAKE_CURRENT_SOURCE_DIR}/vec256_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/vec256_test_all_types.cpp  
+  )
+
+# Caffe2 specific tests
+if(BUILD_CAFFE2)
+  list(APPEND ATen_CPU_TEST_SRCS
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor_interop_test.cpp)
+  list(APPEND ATen_CUDA_TEST_SRCS
+    ${CMAKE_CURRENT_SOURCE_DIR}/cuda_tensor_interop_test.cpp)
 endif()
 
-if(NOT NO_CUDA OR WITH_ROCM)
-  torch_cuda_based_add_executable(apply_test apply_test.cpp)
-  target_link_libraries(apply_test ATen_cpu ATen_cuda_library)
-endif()
 
-if (CUDNN_FOUND)
-  add_executable(cudnn_test cudnn_test.cpp)
-  target_link_libraries(cudnn_test ATen_cpu ATen_cuda_library)
-endif()
+# ---[ Send the lists to the parent scope.
+set(ATen_CPU_TEST_SRCS ${ATen_CPU_TEST_SRCS} PARENT_SCOPE)
+set(ATen_CUDA_TEST_SRCS ${ATen_CUDA_TEST_SRCS} PARENT_SCOPE)
+set(ATen_HIP_TEST_SRCS ${ATen_HIP_TEST_SRCS} PARENT_SCOPE)
+set(ATen_VULKAN_TEST_SRCS ${ATen_VULKAN_TEST_SRCS} PARENT_SCOPE)
+set(ATen_MOBILE_TEST_SRCS ${ATen_MOBILE_TEST_SRCS} PARENT_SCOPE)
+set(ATen_VEC256_TEST_SRCS ${ATen_VEC256_TEST_SRCS} PARENT_SCOPE)

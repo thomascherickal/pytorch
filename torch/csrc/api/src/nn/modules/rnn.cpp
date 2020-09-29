@@ -1,395 +1,783 @@
 #include <torch/nn/modules/rnn.h>
 
-#include <torch/nn/modules/dropout.h>
+#include <torch/nn/init.h>
+#include <torch/types.h>
+#include <torch/utils.h>
 
-#include <ATen/Error.h>
-#include <ATen/optional.h>
+#include <c10/util/Exception.h>
 
 #include <array>
 #include <cmath>
 #include <cstdint>
 #include <functional>
-#include <iostream>
 #include <memory>
+#include <regex>
 #include <string>
 #include <tuple>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
+using namespace torch::nn::utils::rnn;
+
 namespace torch {
 namespace nn {
-namespace {
-Variable linear(Tensor x, Tensor w, Tensor b) {
-  if (x.ndimension() == 2 && b.defined()) {
-    // Fused op is marginally faster
-    assert(x.size(1) == w.size(1));
-    return at::addmm(b, x, w.t());
-  }
 
-  auto output = x.matmul(w.t());
-  if (b.defined()) {
-    output += b;
-  }
-  return output;
-}
-} // namespace
+/// These must line up with the CUDNN mode codes:
+/// https://docs.nvidia.com/deeplearning/sdk/cudnn-developer-guide/index.html#cudnnRNNMode_t
+enum class CuDNNMode { RNN_RELU = 0, RNN_TANH = 1, LSTM = 2, GRU = 3 };
 
-// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ RNNBase ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-template <typename Derived>
-RNNBase<Derived>::RNNBase(
-    int64_t input_size,
-    int64_t hidden_size,
-    at::optional<CuDNNMode> cudnn_mode,
-    int64_t number_of_gates,
-    bool has_cell_state)
-    : input_size_(input_size),
-      hidden_size_(hidden_size),
-      number_of_gates_(number_of_gates),
-      has_cell_state_(has_cell_state),
-      cudnn_mode_(std::move(cudnn_mode)) {}
-
-template <typename Derived>
-void RNNBase<Derived>::reset() {
-  if (dropout_ > 0.0) {
-    dropout_module_ = Dropout(dropout_).build();
-  }
-
-  ihw_.resize(layers_);
-  hhw_.resize(layers_);
-  ihb_.resize(layers_);
-  hhb_.resize(layers_);
-
-  const int64_t gate_size = hidden_size_ * number_of_gates_;
-
-  for (int64_t layer = 0; layer < layers_; ++layer) {
-    const int64_t input_size = (layer == 0) ? input_size_ : hidden_size_;
-    register_parameter(
-        "weight_ih_l",
-        layer,
-        &RNNBase::ihw_,
-        at::CPU(at::kFloat).empty({gate_size, input_size}));
-    register_parameter(
-        "weight_hh_l",
-        layer,
-        &RNNBase::hhw_,
-        at::CPU(at::kFloat).empty({gate_size, hidden_size_}));
-
-    if (with_bias_) {
-      register_parameter(
-          "bias_ih_l",
-          layer,
-          &RNNBase::ihb_,
-          at::CPU(at::kFloat).empty({gate_size}));
-      register_parameter(
-          "bias_hh_l",
-          layer,
-          &RNNBase::hhb_,
-          at::CPU(at::kFloat).empty({gate_size}));
-    }
-  }
-  flatten_parameters_for_cudnn();
-
-  auto stdv = 1.0 / std::sqrt(hidden_size_);
-  for (auto& p : this->parameters()) {
-    p.second.data().uniform_(-stdv, stdv);
-  }
-}
-
-template <typename Derived>
-variable_list RNNBase<Derived>::forward(variable_list inputs) {
-  variable_list inp = {inputs[0], inputs.size() > 1 ? inputs[1] : Variable()};
-  if (cudnn_mode_.has_value() && at::cudnn_is_acceptable(inp[0]) &&
-      dropout_ == 0) {
-    return {CUDNN_forward(inp)};
+CuDNNMode get_cudnn_mode_for_rnn(detail::RNNOptionsBase::rnn_options_base_mode_t mode) {
+  if (c10::get_if<enumtype::kRNN_RELU>(&mode)) {
+    return CuDNNMode::RNN_RELU;
+  } else if (c10::get_if<enumtype::kRNN_TANH>(&mode)) {
+    return CuDNNMode::RNN_TANH;
+  } else if (c10::get_if<enumtype::kLSTM>(&mode)) {
+    return CuDNNMode::LSTM;
+  } else if (c10::get_if<enumtype::kGRU>(&mode)) {
+    return CuDNNMode::GRU;
   } else {
-    return {autograd_forward(inp)};
+    TORCH_CHECK(false, "Unknown mode: ", torch::enumtype::get_enum_name(mode));
   }
 }
 
+Tensor apply_permutation(const Tensor& tensor, const Tensor& permutation, int64_t dim = 1) {
+  return tensor.index_select(dim, permutation);
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ RNNImplBase ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+namespace detail {
 template <typename Derived>
-std::vector<Tensor> RNNBase<Derived>::flat_weights() const {
-  std::vector<Tensor> flat;
-  for (int64_t layer = 0; layer < layers_; layer++) {
-    flat.push_back(ihw_[layer]);
-    flat.push_back(hhw_[layer]);
-    if (with_bias_) {
-      flat.push_back(ihb_[layer]);
-      flat.push_back(hhb_[layer]);
-    }
-  }
-  return flat;
+RNNImplBase<Derived>::RNNImplBase(const RNNOptionsBase& options_)
+  : options_base(options_) {
+  reset();
 }
 
 template <typename Derived>
-void RNNBase<Derived>::register_parameter(
-    const std::string& name,
-    int64_t layer,
-    std::vector<Variable> RNNBase::*variables,
-    Tensor tensor) {
-  (this->*variables)[layer] =
-      autograd::make_variable(tensor, /*requires_grad=*/true);
-  register_parameter(
-      name + std::to_string(layer),
-      [variables, layer](void* self) -> Variable& {
-        return (static_cast<RNNBase*>(self)->*variables)[layer];
-      },
-      [variables, layer](const void* self) -> const Variable& {
-        return (static_cast<const RNNBase*>(self)->*variables)[layer];
-      });
-}
+void RNNImplBase<Derived>::reset() {
+  const int64_t num_directions = options_base.bidirectional() ? 2 : 1;
 
-template <typename Derived>
-variable_list RNNBase<Derived>::autograd_forward(variable_list inputs) {
-  auto inp = inputs[0];
+  TORCH_CHECK(
+    0 <= options_base.dropout() && options_base.dropout() <= 1,
+    "dropout should be a number in range [0, 1] ",
+    "representing the probability of an element being ",
+    "zeroed");
 
-  std::vector<Tensor> state;
-  auto has_hidden = inputs[1].defined();
-  auto layer_dimension = has_hidden ? inputs[1].ndimension() - 3 : -1;
-  for (int64_t layer = 0; layer < layers_; layer++) {
-    state.push_back(
-        has_hidden ? inputs[1].select(layer_dimension, layer) : Variable());
+  if (options_base.dropout() > 0 && options_base.num_layers() == 1) {
+    TORCH_WARN(
+      "dropout option adds dropout after all but last ",
+      "recurrent layer, so non-zero dropout expects ",
+      "num_layers greater than 1, but got dropout=", options_base.dropout(), " and ",
+      "num_layers=", options_base.num_layers());
   }
 
-  auto output =
-      Variable(inp.type().zeros({inp.size(0), inp.size(1), hidden_size_}));
-  for (int64_t t = 0; t < inp.size(0); t++) {
-    auto x = inp.select(0, t);
-    for (int64_t i = 0; i < layers_; i++) {
-      // cell_forward() returns a stacked tensor of one or more cell states.
-      auto layer_output = cell_forward({x, state[i]}, i);
-      // If there are multiple cell states, keep all. If there is only one,
-      // the first dimension will be 1, so `.squeeze(0)` will unpack it.
-      state[i] = layer_output[0].squeeze(0);
-      // x should always be the hidden cell state h, assumed to be the zero-th.
-      x = layer_output[0][0];
-      output.select(0, t).copy_(x);
-      if (dropout_ > 0 && i != layers_ - 1) {
-        x = dropout_module_->forward({x})[0];
+  int64_t gate_size = 0;
+  if (c10::get_if<enumtype::kLSTM>(&options_base.mode())) {
+    gate_size = 4 * options_base.hidden_size();
+  } else if (c10::get_if<enumtype::kGRU>(&options_base.mode())) {
+    gate_size = 3 * options_base.hidden_size();
+  } else if (c10::get_if<enumtype::kRNN_TANH>(&options_base.mode())) {
+    gate_size = options_base.hidden_size();
+  } else if (c10::get_if<enumtype::kRNN_RELU>(&options_base.mode())) {
+    gate_size = options_base.hidden_size();
+  } else {
+    TORCH_CHECK(false, "Unrecognized RNN mode: " + torch::enumtype::get_enum_name(options_base.mode()));
+  }
+
+  flat_weights_names_ = {};
+  all_weights_ = {};
+
+  for (int64_t layer = 0; layer < options_base.num_layers(); layer++) {
+    for (int64_t direction = 0; direction < num_directions; direction++) {
+      int64_t layer_input_size = layer == 0 ? options_base.input_size() : options_base.hidden_size() * num_directions;
+
+      auto w_ih = torch::empty({gate_size, layer_input_size});
+      auto w_hh = torch::empty({gate_size, options_base.hidden_size()});
+      auto b_ih = torch::empty({gate_size});
+      // Second bias vector included for CuDNN compatibility. Only one
+      // bias vector is needed in standard definition.
+      auto b_hh = torch::empty({gate_size});
+      std::vector<Tensor> layer_params = {w_ih, w_hh, b_ih, b_hh};
+
+      std::string suffix = direction == 1 ? "_reverse" : "";
+      std::vector<std::string> param_names = {"weight_ih_l{layer}{suffix}", "weight_hh_l{layer}{suffix}"};
+      if (options_base.bias()) {
+        param_names.emplace_back("bias_ih_l{layer}{suffix}");
+        param_names.emplace_back("bias_hh_l{layer}{suffix}");
       }
+      for (size_t i = 0; i < param_names.size(); i++) {  // NOLINT(modernize-loop-convert)
+        std::string x = std::regex_replace(param_names[i], std::regex("\\{layer\\}"), c10::str(layer));
+        x = std::regex_replace(x, std::regex("\\{suffix\\}"), c10::str(suffix));
+        param_names[i] = x;
+      }
+
+      for (size_t i = 0; i < param_names.size(); i++) {
+        auto name = param_names[i];
+        auto param = layer_params[i];
+        this->register_parameter(name, param);
+      }
+      flat_weights_names_.insert(flat_weights_names_.end(), param_names.begin(), param_names.end());
+      all_weights_.emplace_back(param_names);
     }
   }
 
-  auto state_output = at::stack(state);
-  if (has_cell_state_) {
-    state_output.transpose_(0, 1);
+  flat_weights_ = {};
+  for (const auto& wn : flat_weights_names_) {
+    auto named_parameters = this->named_parameters(/*recurse=*/false);
+    if (named_parameters.contains(wn)) {
+      flat_weights_.emplace_back(named_parameters[wn]);
+    } else {
+      flat_weights_.emplace_back(Tensor());
+    }
   }
-  return variable_list({output, state_output});
+
+  this->flatten_parameters();
+  this->reset_parameters();
 }
 
 template <typename Derived>
-void RNNBase<Derived>::flatten_parameters_for_cudnn() {
-  data_ptrs_.clear();
-  const auto any_parameter = ihw_[0];
-  if (!cudnn_mode_.has_value() || !any_parameter.is_cuda() ||
-      !at::cudnn_is_acceptable(any_parameter) || dropout_ == 0) {
+void RNNImplBase<Derived>::flatten_parameters() {
+  // Resets parameter data pointer so that they can use faster code paths.
+  //
+  // Right now, this works only if the module is on the GPU and cuDNN is enabled.
+  // Otherwise, it's a no-op.
+
+  // Short-circuits if flat_weights_ is only partially instantiated
+  if (flat_weights_.size() != flat_weights_names_.size()) {
     return;
   }
-  std::unordered_set<void*> unique_data_ptrs;
-  auto params = this->parameters();
-  for (auto& p : params) {
-    unique_data_ptrs.insert(p.second.data().data_ptr());
+
+  // Short-circuits if any tensor in self.flat_weights_ is not acceptable to cuDNN
+  // or the tensors in flat_weights_ are of different dtypes
+
+  auto first_fw = flat_weights_[0];
+  auto dtype = first_fw.dtype();
+  for (const auto& fw : flat_weights_) {
+    if (!(fw.dtype() == dtype) ||
+        !fw.is_cuda() ||
+        !torch::cudnn_is_acceptable(fw)) {
+      return;
+    }
   }
-  // TODO PyTorch says:
-  // If any parameters alias, we fall back to the slower, copying code path.
-  // This is
-  // a sufficient check, because overlapping parameter buffers that don't
-  // completely
+
+  // If any parameters alias, we fall back to the slower, copying code path. This is
+  // a sufficient check, because overlapping parameter buffers that don't completely
   // alias would break the assumptions of the uniqueness check in
-  // Module.named_parameters().
-  // But I'm not sure if this is the case for us
-  if (unique_data_ptrs.size() != params.size()) {
+  // Module::named_parameters().
+  std::unordered_set<void*> unique_data_ptrs;
+  for (const auto& p : flat_weights_) {
+    unique_data_ptrs.emplace(p.data_ptr());
+  }
+  if (unique_data_ptrs.size() != flat_weights_.size()) {
     return;
   }
 
   {
-    no_grad_guard guard;
-    flat_weights_ = at::_cudnn_rnn_flatten_weight(
-        flat_weights(),
-        /*weight_stride=*/with_bias_ ? 4 : 2,
-        input_size_,
-        static_cast<int64_t>(*cudnn_mode_),
-        hidden_size_,
-        layers_,
-        false,
-        false); // batch_first and bidirectional, unsupported
-  }
-  for (auto& p : params) {
-    data_ptrs_.emplace_back(p.second.data().data_ptr());
+    torch::DeviceGuard device_guard(first_fw.device());
+
+    // Note: no_grad() is necessary since _cudnn_rnn_flatten_weight is
+    // an inplace operation on self.flat_weights_
+    {
+      torch::NoGradGuard no_grad;
+      if (torch::_use_cudnn_rnn_flatten_weight()) {
+        torch::_cudnn_rnn_flatten_weight(
+              flat_weights_,
+              options_base.bias() ? 4 : 2,
+              options_base.input_size(),
+              static_cast<int64_t>(get_cudnn_mode_for_rnn(options_base.mode())),
+              options_base.hidden_size(),
+              options_base.num_layers(),
+              options_base.batch_first(),
+              options_base.bidirectional());
+      }
+    }
   }
 }
 
 template <typename Derived>
-variable_list RNNBase<Derived>::CUDNN_forward(variable_list inputs) {
-  auto x = inputs[0];
-  Variable hx, cx;
-  if (inputs[1].defined()) {
-    if (has_cell_state_) {
-      hx = inputs[1][0];
-      cx = inputs[1][1];
+void RNNImplBase<Derived>::reset_flat_weights() {
+  flat_weights_ = {};
+  for (const auto& wn : flat_weights_names_) {
+    auto named_parameters = this->named_parameters(/*recurse=*/false);
+    if (named_parameters.contains(wn)) {
+      flat_weights_.emplace_back(named_parameters[wn]);
     } else {
-      hx = inputs[1];
-    }
-  } else {
-    hx = x.type().zeros({layers_, x.size(1), hidden_size_});
-    if (has_cell_state_) {
-      cx = x.type().zeros({layers_, x.size(1), hidden_size_});
+      flat_weights_.emplace_back(Tensor());
     }
   }
-  auto dropout_state = x.type().tensor();
+}
 
-  std::vector<void*> weight_data_ptrs;
-  auto params = this->parameters();
-  for (auto& p : params) {
-    weight_data_ptrs.emplace_back(p.second.data().data_ptr());
+template <typename Derived>
+void RNNImplBase<Derived>::to(
+    torch::Device device,
+    torch::Dtype dtype,
+    bool non_blocking) {
+  nn::Module::to(device, dtype, non_blocking);
+  reset_flat_weights();
+  flatten_parameters();
+}
+
+template <typename Derived>
+void RNNImplBase<Derived>::to(torch::Dtype dtype, bool non_blocking) {
+  nn::Module::to(dtype, non_blocking);
+  reset_flat_weights();
+  flatten_parameters();
+}
+
+template <typename Derived>
+void RNNImplBase<Derived>::to(torch::Device device, bool non_blocking) {
+  nn::Module::to(device, non_blocking);
+  reset_flat_weights();
+  flatten_parameters();
+}
+
+template <typename Derived>
+void RNNImplBase<Derived>::reset_parameters() {
+  const double stdv = 1.0 / std::sqrt(options_base.hidden_size());
+  for (auto& weight : this->parameters()) {
+    init::uniform_(weight, -stdv, stdv);
   }
-  if (weight_data_ptrs != data_ptrs_) {
-    std::cerr
-        << "Parameters are unflattened! Code path might be super slow. "
-        << "Please call flatten_parameters_for_cudnn() when you muck around with "
-        << "storages !" << std::endl;
-    flat_weights_ = Variable();
-  }
+}
 
-  AT_CHECK(cudnn_mode_.has_value(), "No CuDNN mode has been supplied!");
+template <typename Derived>
+void RNNImplBase<Derived>::check_input(const Tensor& input, const Tensor& batch_sizes) const {
+  int64_t expected_input_dim = batch_sizes.defined() ?  2 : 3;
+  TORCH_CHECK(
+    input.dim() == expected_input_dim,
+    "input must have ", expected_input_dim, " dimensions, got ", input.dim());
+  TORCH_CHECK(
+    options_base.input_size() == input.size(-1),
+    "input.size(-1) must be equal to input_size. Expected ", options_base.input_size(), ", got ", input.size(-1));
+}
 
-  // tup = std::tuple of output, hy, cy, reserve, new_weight_buf
-  auto tup = _cudnn_rnn(
-      x,
-      flat_weights(),
-      /*weight_stride=*/with_bias_ ? 4 : 2,
-      flat_weights_,
-      hx,
-      cx,
-      static_cast<int64_t>(*cudnn_mode_),
-      hidden_size_,
-      layers_,
-      false, // batch first
-      0, // TODO Use C++ dropout descriptors
-      this->is_training(),
-      false, // bidirectional
-      {}, // packing not supported
-      dropout_state // TODO waiting on dropout state descriptor in C++ pytorch
-  );
-
-  Variable hidden_output;
-  if (has_cell_state_) {
-    hidden_output = at::stack({std::get<1>(tup), std::get<2>(tup)}, 0);
+template <typename Derived>
+std::tuple<int64_t, int64_t, int64_t> RNNImplBase<Derived>::get_expected_hidden_size(
+  const Tensor& input, const Tensor& batch_sizes) const {
+  int64_t mini_batch = 0;
+  if (batch_sizes.defined()) {
+    mini_batch = batch_sizes[0].item<int64_t>();
   } else {
-    hidden_output = std::get<1>(tup);
+    mini_batch = options_base.batch_first() ? input.size(0) : input.size(1);
+  }
+  int64_t num_directions = options_base.bidirectional() ? 2 : 1;
+  return std::make_tuple(options_base.num_layers() * num_directions, mini_batch, options_base.hidden_size());
+}
+
+template <typename Derived>
+void RNNImplBase<Derived>::check_hidden_size(
+    const Tensor& hx,
+    std::tuple<int64_t, int64_t, int64_t> expected_hidden_size,
+    std::string msg) const {
+  auto expected_hidden_size_vec = std::vector<int64_t>({
+    std::get<0>(expected_hidden_size),
+    std::get<1>(expected_hidden_size),
+    std::get<2>(expected_hidden_size),
+  });
+  if (hx.sizes() != expected_hidden_size_vec) {
+    msg = std::regex_replace(msg, std::regex("\\{1\\}"), c10::str(expected_hidden_size_vec));
+    msg = std::regex_replace(msg, std::regex("\\{2\\}"), c10::str(hx.sizes()));
+    TORCH_CHECK(false, msg);
+  }
+}
+
+template <typename Derived>
+void RNNImplBase<Derived>::check_forward_args(Tensor input, Tensor hidden, Tensor batch_sizes) const {
+  this->check_input(input, batch_sizes);
+  auto expected_hidden_size = this->get_expected_hidden_size(input, batch_sizes);
+
+  this->check_hidden_size(hidden, expected_hidden_size);
+}
+
+template <typename Derived>
+Tensor RNNImplBase<Derived>::permute_hidden(Tensor hx, const Tensor& permutation) const {
+  if (!permutation.defined()) {
+    return hx;
+  }
+  return apply_permutation(hx, permutation);
+}
+
+template <typename Derived>
+void RNNImplBase<Derived>::pretty_print(std::ostream& stream) const {
+  const std::string name = this->name();
+  const std::string name_without_impl = name.substr(0, name.size() - 4);
+  stream << std::boolalpha << name_without_impl << "(input_size=" << options_base.input_size()
+         << ", hidden_size=" << options_base.hidden_size()
+         << ", num_layers=" << options_base.num_layers()
+         << ", bias=" << options_base.bias()
+         << ", batch_first=" << options_base.batch_first()
+         << ", dropout=" << options_base.dropout()
+         << ", bidirectional=" << options_base.bidirectional()
+         << ")";
+}
+
+template <typename Derived>
+std::vector<Tensor> RNNImplBase<Derived>::all_weights() const {
+  std::vector<Tensor> result = {};
+  auto named_parameters = this->named_parameters(/*recurse=*/false);
+  for (const auto& weights : all_weights_) {
+    for (const auto& weight : weights) {
+      result.emplace_back(named_parameters[weight]);
+    }
+  }
+  return result;
+}
+
+template class RNNImplBase<LSTMImpl>;
+template class RNNImplBase<GRUImpl>;
+template class RNNImplBase<RNNImpl>;
+} // namespace detail
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ RNN ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+detail::RNNOptionsBase::rnn_options_base_mode_t compute_rnn_options_base_mode(
+  RNNOptions::nonlinearity_t nonlinearity) {
+  if (c10::get_if<enumtype::kTanh>(&nonlinearity)) {
+    return torch::kRNN_TANH;
+  } else if (c10::get_if<enumtype::kReLU>(&nonlinearity)) {
+    return torch::kRNN_RELU;
+  } else {
+    TORCH_CHECK(false, "Unknown nonlinearity ", torch::enumtype::get_enum_name(nonlinearity));
+  }
+}
+
+RNNImpl::RNNImpl(const RNNOptions& options_)
+    : detail::RNNImplBase<RNNImpl>(
+          detail::RNNOptionsBase(
+            compute_rnn_options_base_mode(options_.nonlinearity()),
+            options_.input_size(),
+            options_.hidden_size())
+              .num_layers(options_.num_layers())
+              .bias(options_.bias())
+              .batch_first(options_.batch_first())
+              .dropout(options_.dropout())
+              .bidirectional(options_.bidirectional())),
+      options(options_) {}
+
+std::tuple<Tensor, Tensor> RNNImpl::forward_helper(
+  const Tensor& input,
+  const Tensor& batch_sizes,
+  const Tensor& sorted_indices,
+  int64_t max_batch_size,
+  Tensor hx) {
+  if (!hx.defined()) {
+    int64_t num_directions = options_base.bidirectional() ? 2 : 1;
+    hx = torch::zeros({options_base.num_layers() * num_directions,
+                     max_batch_size, options_base.hidden_size()},
+                     torch::dtype(input.dtype()).device(input.device()));
+  } else {
+    // Each batch of the hidden state should match the input sequence that
+    // the user believes he/she is passing in.
+    hx = this->permute_hidden(hx, sorted_indices);
   }
 
-  Variable output = std::get<0>(tup);
-  return variable_list({output, hidden_output});
+  this->check_forward_args(input, hx, batch_sizes);
+
+  std::tuple<Tensor, Tensor> result;
+  if (!batch_sizes.defined()) {
+    if (c10::get_if<enumtype::kRNN_TANH>(&options_base.mode())) {
+      result = torch::rnn_tanh(input, hx, flat_weights_, options_base.bias(), options_base.num_layers(),
+                               options_base.dropout(), this->is_training(), options_base.bidirectional(), options_base.batch_first());
+    } else if (c10::get_if<enumtype::kRNN_RELU>(&options_base.mode())) {
+      result = torch::rnn_relu(input, hx, flat_weights_, options_base.bias(), options_base.num_layers(),
+                               options_base.dropout(), this->is_training(), options_base.bidirectional(), options_base.batch_first());
+    } else {
+      TORCH_CHECK(false, "Unknown mode: ", torch::enumtype::get_enum_name(options_base.mode()));
+    }
+  } else {
+    if (c10::get_if<enumtype::kRNN_TANH>(&options_base.mode())) {
+      result = torch::rnn_tanh(input, batch_sizes, hx, flat_weights_, options_base.bias(),
+                               options_base.num_layers(), options_base.dropout(), this->is_training(), options_base.bidirectional());
+    } else if (c10::get_if<enumtype::kRNN_RELU>(&options_base.mode())) {
+      result = torch::rnn_relu(input, batch_sizes, hx, flat_weights_, options_base.bias(),
+                               options_base.num_layers(), options_base.dropout(), this->is_training(), options_base.bidirectional());
+    } else {
+      TORCH_CHECK(false, "Unknown mode: ", torch::enumtype::get_enum_name(options_base.mode()));
+    }
+  }
+  auto output = std::get<0>(result);
+  auto hidden = std::get<1>(result);
+
+  return std::make_tuple(output, hidden);
 }
 
-template <typename Derived>
-void RNNBase<Derived>::to(at::Type& type) {
-  nn::Module::to(type);
-  flatten_parameters_for_cudnn();
+std::tuple<Tensor, Tensor> RNNImpl::forward(const Tensor& input, Tensor hx) {
+  auto batch_sizes = torch::Tensor();
+  auto max_batch_size = options_base.batch_first() ? input.size(0) : input.size(1);
+  auto sorted_indices = torch::Tensor();
+  auto unsorted_indices = torch::Tensor();
+
+  Tensor output, hidden;
+  std::tie(output, hidden) = this->forward_helper(input, batch_sizes, sorted_indices, max_batch_size, std::move(hx));
+
+  return std::make_tuple(output, this->permute_hidden(hidden, unsorted_indices));
 }
 
-template <typename Derived>
-void RNNBase<Derived>::to(at::ScalarType scalar_type) {
-  nn::Module::to(scalar_type);
-  flatten_parameters_for_cudnn();
-}
+std::tuple<PackedSequence, Tensor> RNNImpl::forward_with_packed_input(const PackedSequence& packed_input, Tensor hx) {
+  const auto& input = packed_input.data();
+  const auto& batch_sizes = packed_input.batch_sizes();
+  const auto& sorted_indices = packed_input.sorted_indices();
+  const auto& unsorted_indices = packed_input.unsorted_indices();
+  auto max_batch_size = batch_sizes[0].item<int64_t>();
 
-template <typename Derived>
-void RNNBase<Derived>::to(at::Backend backend) {
-  nn::Module::to(backend);
-  flatten_parameters_for_cudnn();
-}
+  Tensor output, hidden;
+  std::tie(output, hidden) = this->forward_helper(input, batch_sizes, sorted_indices, max_batch_size, std::move(hx));
 
-template class RNNBase<LSTM>;
-template class RNNBase<GRU>;
-template class RNNBase<RNN>;
+  auto output_packed = PackedSequence(output, batch_sizes, sorted_indices, unsorted_indices);
+  return std::make_tuple(output_packed, this->permute_hidden(hidden, unsorted_indices));
+}
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ LSTM ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-LSTM::LSTM(int64_t input_size, int64_t hidden_size)
-    : RNNBase(
-          input_size,
-          hidden_size,
-          CuDNNMode::LSTM,
-          /*number_of_gates=*/4,
-          /*has_cell_state=*/true) {}
+LSTMImpl::LSTMImpl(const LSTMOptions& options_)
+    : detail::RNNImplBase<LSTMImpl>(
+          detail::RNNOptionsBase(
+            torch::kLSTM,
+            options_.input_size(),
+            options_.hidden_size())
+              .num_layers(options_.num_layers())
+              .bias(options_.bias())
+              .batch_first(options_.batch_first())
+              .dropout(options_.dropout())
+              .bidirectional(options_.bidirectional())),
+      options(options_) {}
 
-variable_list LSTM::cell_forward(variable_list inputs, int64_t layer) {
-  auto x = inputs[0];
-  auto hid = inputs[1].defined() ? inputs[1]
-                                 : x.type().zeros({2, x.size(0), hidden_size_});
-  auto hx = hid[0];
-  auto cx = hid[1];
+void LSTMImpl::check_forward_args(const Tensor& input, std::tuple<Tensor, Tensor> hidden, const Tensor& batch_sizes) const {
+  this->check_input(input, batch_sizes);
+  auto expected_hidden_size = this->get_expected_hidden_size(input, batch_sizes);
 
-  auto gates = linear(x, ihw_[layer], ihb_[layer]) +
-      linear(hx, hhw_[layer], hhb_[layer]);
+  this->check_hidden_size(std::get<0>(hidden), expected_hidden_size,
+                          "Expected hidden[0] size {1}, got {2}");
+  this->check_hidden_size(std::get<1>(hidden), expected_hidden_size,
+                          "Expected hidden[1] size {1}, got {2}");
+}
 
-  auto chunked = gates.chunk(4, 1);
-  auto in_gate = chunked[0].sigmoid();
-  auto forget_gate = chunked[1].sigmoid();
-  auto cell_gate = chunked[2].tanh();
-  auto out_gate = chunked[3].sigmoid();
+std::tuple<Tensor, Tensor> LSTMImpl::permute_hidden(std::tuple<Tensor, Tensor> hx, const Tensor& permutation) const {
+  if (!permutation.defined()) {
+    return hx;
+  }
+  return std::make_tuple(
+    apply_permutation(std::get<0>(hx), permutation),
+    apply_permutation(std::get<1>(hx), permutation)
+  );
+}
 
-  auto cy = (forget_gate * cx) + (in_gate * cell_gate);
-  auto hy = out_gate * cy.tanh();
+std::tuple<Tensor, std::tuple<Tensor, Tensor>> LSTMImpl::forward_helper(
+  const Tensor& input,
+  const Tensor& batch_sizes,
+  const Tensor& sorted_indices,
+  int64_t max_batch_size,
+  torch::optional<std::tuple<Tensor, Tensor>> hx_opt) {
 
-  return {at::stack({hy, cy}, 0)};
+  std::tuple<Tensor, Tensor> hx;
+  if (!hx_opt.has_value()) {
+    int64_t num_directions = options.bidirectional() ? 2 : 1;
+    auto zeros = torch::zeros({options.num_layers() * num_directions,
+                     max_batch_size, options.hidden_size()},
+                     torch::dtype(input.dtype()).device(input.device()));
+    hx = std::make_tuple(zeros, zeros);
+  } else {
+    hx = hx_opt.value();
+    // Each batch of the hidden state should match the input sequence that
+    // the user believes he/she is passing in.
+    hx = this->permute_hidden(hx, sorted_indices);
+  }
+
+  this->check_forward_args(input, hx, batch_sizes);
+  std::tuple<Tensor, Tensor, Tensor> result;
+  if (!batch_sizes.defined()) {
+    result = torch::lstm(input, {std::get<0>(hx), std::get<1>(hx)}, flat_weights_, options.bias(), options.num_layers(),
+                     options.dropout(), this->is_training(), options.bidirectional(), options.batch_first());
+  } else {
+    result = torch::lstm(input, batch_sizes, {std::get<0>(hx), std::get<1>(hx)}, flat_weights_, options.bias(),
+                     options.num_layers(), options.dropout(), this->is_training(), options.bidirectional());
+  }
+  auto output = std::get<0>(result);
+  auto hidden = std::make_tuple(std::get<1>(result), std::get<2>(result));
+
+  return std::make_tuple(output, hidden);
+}
+
+std::tuple<Tensor, std::tuple<Tensor, Tensor>> LSTMImpl::forward(
+  const Tensor& input, torch::optional<std::tuple<Tensor, Tensor>> hx_opt) {
+  auto batch_sizes = torch::Tensor();
+  auto max_batch_size = options.batch_first() ? input.size(0) : input.size(1);
+  auto sorted_indices = torch::Tensor();
+  auto unsorted_indices = torch::Tensor();
+
+  Tensor output;
+  std::tuple<Tensor, Tensor> hidden;
+  std::tie(output, hidden) = this->forward_helper(input, batch_sizes, sorted_indices, max_batch_size, std::move(hx_opt));
+
+  return std::make_tuple(output, this->permute_hidden(hidden, unsorted_indices));
+}
+
+std::tuple<PackedSequence, std::tuple<Tensor, Tensor>> LSTMImpl::forward_with_packed_input(
+  const PackedSequence& packed_input, torch::optional<std::tuple<Tensor, Tensor>> hx_opt) {
+  const auto& input = packed_input.data();
+  const auto& batch_sizes = packed_input.batch_sizes();
+  const auto& sorted_indices = packed_input.sorted_indices();
+  const auto& unsorted_indices = packed_input.unsorted_indices();
+  auto max_batch_size = batch_sizes[0].item<int64_t>();
+
+  Tensor output;
+  std::tuple<Tensor, Tensor> hidden;
+  std::tie(output, hidden) = this->forward_helper(input, batch_sizes, sorted_indices, max_batch_size, std::move(hx_opt));
+
+  auto output_packed = PackedSequence(output, batch_sizes, sorted_indices, unsorted_indices);
+  return std::make_tuple(output_packed, this->permute_hidden(hidden, unsorted_indices));
 }
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ GRU ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-GRU::GRU(int64_t input_size, int64_t hidden_size)
-    : RNNBase(input_size, hidden_size, CuDNNMode::GRU, /*number_of_gates=*/3) {}
+GRUImpl::GRUImpl(const GRUOptions& options_)
+    : detail::RNNImplBase<GRUImpl>(
+          detail::RNNOptionsBase(
+            torch::kGRU,
+            options_.input_size(),
+            options_.hidden_size())
+              .num_layers(options_.num_layers())
+              .bias(options_.bias())
+              .batch_first(options_.batch_first())
+              .dropout(options_.dropout())
+              .bidirectional(options_.bidirectional())),
+      options(options_) {}
 
-variable_list GRU::cell_forward(variable_list inputs, int64_t layer) {
-  auto x = inputs[0];
-  auto hx = inputs[1].defined() ? inputs[1]
-                                : x.type().zeros({x.size(0), hidden_size_});
+std::tuple<Tensor, Tensor> GRUImpl::forward_helper(
+  const Tensor& input,
+  const Tensor& batch_sizes,
+  const Tensor& sorted_indices,
+  int64_t max_batch_size,
+  Tensor hx) {
+  if (!hx.defined()) {
+    int64_t num_directions = options.bidirectional() ? 2 : 1;
+    hx = torch::zeros({options.num_layers() * num_directions,
+                     max_batch_size, options.hidden_size()},
+                     torch::dtype(input.dtype()).device(input.device()));
+  } else {
+    // Each batch of the hidden state should match the input sequence that
+    // the user believes he/she is passing in.
+    hx = this->permute_hidden(hx, sorted_indices);
+  }
 
-  auto gi = linear(x, ihw_[layer], ihb_[layer]);
-  auto gh = linear(x, hhw_[layer], hhb_[layer]);
-  auto gic = gi.chunk(3, 1);
-  auto ghc = gh.chunk(3, 1);
+  this->check_forward_args(input, hx, batch_sizes);
+  std::tuple<Tensor, Tensor> result;
+  if (!batch_sizes.defined()) {
+    result = torch::gru(input, hx, flat_weights_, options.bias(), options.num_layers(),
+                     options.dropout(), this->is_training(), options.bidirectional(), options.batch_first());
+  } else {
+    result = torch::gru(input, batch_sizes, hx, flat_weights_, options.bias(),
+                     options.num_layers(), options.dropout(), this->is_training(), options.bidirectional());
+  }
+  auto output = std::get<0>(result);
+  auto hidden = std::get<1>(result);
 
-  auto reset_gate = (gic[0] + ghc[0]).sigmoid_();
-  auto input_gate = (gic[1] + ghc[1]).sigmoid_();
-  auto new_gate = (gic[2] + reset_gate * ghc[2]).tanh_();
-  auto hy = new_gate + input_gate * (hx - new_gate);
-
-  return {at::stack(hy)};
+  return std::make_tuple(output, hidden);
 }
 
-// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ RNN ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+std::tuple<Tensor, Tensor> GRUImpl::forward(const Tensor& input, Tensor hx) {
+  auto batch_sizes = torch::Tensor();
+  auto max_batch_size = options.batch_first() ? input.size(0) : input.size(1);
+  auto sorted_indices = torch::Tensor();
+  auto unsorted_indices = torch::Tensor();
 
-RNN::RNN(int64_t input_size, int64_t hidden_size)
-    : RNNBase(input_size, hidden_size) {}
+  Tensor output, hidden;
+  std::tie(output, hidden) = this->forward_helper(input, batch_sizes, sorted_indices, max_batch_size, std::move(hx));
 
-void RNN::reset() {
-  static std::array<ActivationFunction, 2> activations = {at::relu, at::tanh};
-  cudnn_mode_ = static_cast<CuDNNMode>(activation_);
-  RNNBase<RNN>::reset();
-  activation_function_ = activations.at(static_cast<int64_t>(activation_));
+  return std::make_tuple(output, this->permute_hidden(hidden, unsorted_indices));
 }
 
-RNN& RNN::tanh() {
-  return activation(Activation::Tanh);
+std::tuple<PackedSequence, Tensor> GRUImpl::forward_with_packed_input(const PackedSequence& packed_input, Tensor hx) {
+  const auto& input = packed_input.data();
+  const auto& batch_sizes = packed_input.batch_sizes();
+  const auto& sorted_indices = packed_input.sorted_indices();
+  const auto& unsorted_indices = packed_input.unsorted_indices();
+  auto max_batch_size = batch_sizes[0].item<int64_t>();
+
+  Tensor output, hidden;
+  std::tie(output, hidden) = this->forward_helper(input, batch_sizes, sorted_indices, max_batch_size, std::move(hx));
+
+  auto output_packed = PackedSequence(output, batch_sizes, sorted_indices, unsorted_indices);
+  return std::make_tuple(output_packed, this->permute_hidden(hidden, unsorted_indices));
 }
 
-RNN& RNN::relu() {
-  return activation(Activation::ReLU);
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ RNNCellImplBase ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+namespace detail {
+template <typename Derived>
+RNNCellImplBase<Derived>::RNNCellImplBase(
+  const RNNCellOptionsBase& options_)
+  : options_base(options_) {
+  reset();
 }
 
-variable_list RNN::cell_forward(variable_list inputs, int64_t layer) {
-  auto x = inputs[0];
-  auto hx = inputs[1].defined() ? inputs[1]
-                                : x.type().zeros({x.size(0), hidden_size_});
+template <typename Derived>
+void RNNCellImplBase<Derived>::reset() {
+  weight_ih = this->register_parameter(
+    "weight_ih", torch::empty({options_base.num_chunks() * options_base.hidden_size(), options_base.input_size()}));
+  weight_hh = this->register_parameter(
+    "weight_hh", torch::empty({options_base.num_chunks() * options_base.hidden_size(), options_base.hidden_size()}));
 
-  auto h = linear(x, ihw_[layer], ihb_[layer]) +
-      linear(hx, hhw_[layer], hhb_[layer]);
+  if (options_base.bias()) {
+    bias_ih = this->register_parameter("bias_ih", torch::empty({options_base.num_chunks() * options_base.hidden_size()}));
+    bias_hh = this->register_parameter("bias_hh", torch::empty({options_base.num_chunks() * options_base.hidden_size()}));
+  } else {
+    bias_ih = this->register_parameter("bias_ih", Tensor(), /*requires_grad=*/false);
+    bias_hh = this->register_parameter("bias_hh", Tensor(), /*requires_grad=*/false);
+  }
 
-  return {at::stack(activation_function_(h))};
+  reset_parameters();
 }
+
+template <typename Derived>
+void RNNCellImplBase<Derived>::reset_parameters() {
+  const double stdv = 1.0 / std::sqrt(options_base.hidden_size());
+  for (auto& weight : this->parameters()) {
+    init::uniform_(weight, -stdv, stdv);
+  }
+}
+
+template <typename Derived>
+void RNNCellImplBase<Derived>::pretty_print(std::ostream& stream) const {
+  const std::string name = this->name();
+  const std::string name_without_impl = name.substr(0, name.size() - 4);
+  stream << name_without_impl
+         << "(" << options_base.input_size()
+         << ", " << options_base.hidden_size();
+  if (!options_base.bias()) {
+    stream << ", bias=" << std::boolalpha << false;
+  }
+  auto nonlinearity_str = this->get_nonlinearity_str();
+  if (!nonlinearity_str.empty() && nonlinearity_str != "kTanh") {
+    stream << ", nonlinearity=" << nonlinearity_str;
+  }
+  stream << ")"; 
+}
+
+template <typename Derived>
+void RNNCellImplBase<Derived>::check_forward_input(const Tensor& input) const {
+  TORCH_CHECK(
+    input.size(1) == options_base.input_size(), 
+    "input has inconsistent input_size: got ", input.size(1), " expected ", options_base.input_size());
+}
+
+template <typename Derived>
+void RNNCellImplBase<Derived>::check_forward_hidden(const Tensor& input, const Tensor& hx, std::string hidden_label) const {
+  TORCH_CHECK(
+    input.size(0) == hx.size(0),
+    "Input batch size ", input.size(0), " doesn't match hidden", hidden_label, " batch size ", hx.size(0));
+
+  TORCH_CHECK(
+    hx.size(1) == options_base.hidden_size(),
+    "hidden", hidden_label, " has inconsistent hidden_size: got ", hx.size(1), ", expected ", options_base.hidden_size());
+}
+
+template <typename Derived>
+std::string RNNCellImplBase<Derived>::get_nonlinearity_str() const {
+  return "";
+}
+
+template class RNNCellImplBase<LSTMCellImpl>;
+template class RNNCellImplBase<GRUCellImpl>;
+template class RNNCellImplBase<RNNCellImpl>;
+} // namespace detail
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ RNNCell ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+RNNCellImpl::RNNCellImpl(const RNNCellOptions& options_)
+    : detail::RNNCellImplBase<RNNCellImpl>(
+          detail::RNNCellOptionsBase(
+            options_.input_size(),
+            options_.hidden_size(),
+            options_.bias(),
+            /*num_chunks=*/1)),
+      options(options_) {}
+
+
+Tensor RNNCellImpl::forward(const Tensor& input, Tensor hx) {
+  this->check_forward_input(input);
+  if (!hx.defined()) {
+    hx = torch::zeros({input.size(0), options.hidden_size()}, torch::dtype(input.dtype()).device(input.device()));
+  }
+  this->check_forward_hidden(input, hx, "");
+  Tensor ret;
+  if (c10::get_if<enumtype::kTanh>(&options.nonlinearity())) {
+    ret = torch::rnn_tanh_cell(
+      input, hx,
+      weight_ih, weight_hh,
+      bias_ih, bias_hh
+    );
+  } else if (c10::get_if<enumtype::kReLU>(&options.nonlinearity())) {
+    ret = torch::rnn_relu_cell(
+      input, hx,
+      weight_ih, weight_hh,
+      bias_ih, bias_hh
+    );
+  } else {
+    TORCH_CHECK(false, "Unknown nonlinearity: ", torch::enumtype::get_enum_name(options.nonlinearity()));
+  }
+  return ret;
+}
+
+std::string RNNCellImpl::get_nonlinearity_str() const {
+  return get_enum_name(options.nonlinearity());
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ LSTMCell ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+LSTMCellImpl::LSTMCellImpl(const LSTMCellOptions& options_)
+    : detail::RNNCellImplBase<LSTMCellImpl>(
+          detail::RNNCellOptionsBase(
+            options_.input_size(),
+            options_.hidden_size(),
+            options_.bias(),
+            /*num_chunks=*/4)),
+      options(options_) {}
+
+std::tuple<Tensor, Tensor> LSTMCellImpl::forward(
+  const Tensor& input, torch::optional<std::tuple<Tensor, Tensor>> hx_opt) {
+  this->check_forward_input(input);
+
+  std::tuple<Tensor, Tensor> hx;
+  if (!hx_opt.has_value()) {
+    auto zeros = torch::zeros({input.size(0), options.hidden_size()}, torch::dtype(input.dtype()).device(input.device()));
+    hx = std::make_tuple(zeros, zeros);
+  } else {
+    hx = hx_opt.value();
+  }
+
+  this->check_forward_hidden(input, std::get<0>(hx), "[0]");
+  this->check_forward_hidden(input, std::get<1>(hx), "[1]");
+
+  return torch::lstm_cell(
+    input, {std::get<0>(hx), std::get<1>(hx)},
+    weight_ih, weight_hh,
+    bias_ih, bias_hh
+  );
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ GRUCell ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+GRUCellImpl::GRUCellImpl(const GRUCellOptions& options_)
+    : detail::RNNCellImplBase<GRUCellImpl>(
+          detail::RNNCellOptionsBase(
+            options_.input_size(),
+            options_.hidden_size(),
+            options_.bias(),
+            /*num_chunks=*/3)),
+      options(options_) {}
+
+Tensor GRUCellImpl::forward(const Tensor& input, Tensor hx) {
+  this->check_forward_input(input);
+  if (!hx.defined()) {
+    hx = torch::zeros({input.size(0), options.hidden_size()}, torch::dtype(input.dtype()).device(input.device()));
+  }
+  this->check_forward_hidden(input, hx, "");
+  return torch::gru_cell(
+    input, hx,
+    weight_ih, weight_hh,
+    bias_ih, bias_hh
+  );
+}
+
 } // namespace nn
 } // namespace torch

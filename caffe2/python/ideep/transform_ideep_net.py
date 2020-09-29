@@ -1,7 +1,7 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
+
+
+
+
 
 import argparse
 import copy
@@ -277,7 +277,7 @@ def fuse_conv_relu(net):
         op.device_option.CopyFrom(device_option)
 
     new_net = caffe2_pb2.NetDef()
-    new_net.ParseFromString(C.transform_optimizeForIDEEP(net.SerializeToString()))
+    new_net.ParseFromString(C.transform_optimizeForMKLDNN(net.SerializeToString()))
     return new_net
 
 

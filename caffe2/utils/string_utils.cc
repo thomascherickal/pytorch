@@ -6,14 +6,26 @@
 
 namespace caffe2 {
 
-std::vector<std::string> split(char separator, const std::string& string) {
+std::vector<std::string>
+split(char separator, const std::string& string, bool ignore_empty) {
   std::vector<std::string> pieces;
   std::stringstream ss(string);
   std::string item;
   while (getline(ss, item, separator)) {
-    pieces.push_back(std::move(item));
+    if (!ignore_empty || !item.empty()) {
+      pieces.push_back(std::move(item));
+    }
   }
   return pieces;
+}
+
+std::string trim(const std::string& str) {
+  size_t left = str.find_first_not_of(' ');
+  if (left == std::string::npos) {
+    return str;
+  }
+  size_t right = str.find_last_not_of(' ');
+  return str.substr(left, (right - left + 1));
 }
 
 size_t editDistance(
@@ -104,5 +116,4 @@ int32_t editDistanceHelper(const char* s1,
 
     return current[s1_len];
   }
-
 } // namespace caffe2

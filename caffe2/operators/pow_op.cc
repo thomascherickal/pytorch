@@ -1,4 +1,5 @@
 #include "caffe2/operators/pow_op.h"
+#include "caffe2/utils/eigen_utils.h"
 #include "caffe2/utils/math.h"
 // definition of NumericTypes and SameTypeAsInput is in below header file
 //#include "caffe2/operators/elementwise_op.h"
@@ -17,8 +18,22 @@ struct EigenPowFunctor {
           EIGEN_POW((ConstEigenVectorArrayMap<T1>(a, n)), (e));
     } else {
       if (b_is_scalar) {
-        EigenVectorArrayMap<R>(out, n) =
-            EIGEN_POW((ConstEigenVectorArrayMap<T1>(a, n)), (b[0]));
+        if (b[0] == -1.) {
+          EigenVectorArrayMap<R>(out, n) =
+              ConstEigenVectorArrayMap<T1>(a, n).inverse();
+        } else if (b[0] == 0.5) {
+          EigenVectorArrayMap<R>(out, n) =
+              ConstEigenVectorArrayMap<T1>(a, n).sqrt();
+        } else if (b[0] == -0.5) {
+          EigenVectorArrayMap<R>(out, n) =
+              ConstEigenVectorArrayMap<T1>(a, n).rsqrt();
+        } else if (b[0] == 2.) {
+          EigenVectorArrayMap<R>(out, n) =
+              ConstEigenVectorArrayMap<T1>(a, n).square();
+        } else {
+          EigenVectorArrayMap<R>(out, n) =
+              EIGEN_POW((ConstEigenVectorArrayMap<T1>(a, n)), (b[0]));
+        }
       } else {
         EigenVectorArrayMap<R>(out, n) = EIGEN_POW(
             (ConstEigenVectorArrayMap<T1>(a, n)),
@@ -54,7 +69,7 @@ struct EigenPowFunctor {
       size_t n,
       size_t post,
       CPUContext*) {
-    for (int i = 0; i < pre; ++i) {
+    for (auto i = 0U; i < pre; ++i) {
       EigenArrayMap<R>(out + i * n * post, post, n) = EIGEN_POW(
           (ConstEigenArrayMap<T1>(a + i * n * post, post, n)),
           (Eigen::Map<const Eigen::Array<T2, 1, Eigen::Dynamic>>(b, n))
@@ -82,17 +97,65 @@ REGISTER_CPU_OPERATOR(
 OPERATOR_SCHEMA(Pow)
     .NumInputs(1, 2)
     .NumOutputs(1)
-    .Arg("exponent", "The exponent of the power function.")
     .AllowInplace({{0, 0}, {1, 0}})
     .IdenticalTypeAndShapeOfInput(0)
     .SetDoc(R"DOC(
-Pow takes input data (Tensor<T>) and an argument exponent, which can be a
-scalar or another tensor. It produces one output data (Tensor<T>), where
-the function `f(x) = x^exponent` is applied to the data tensor elementwise.
+The *Pow* op takes an input data tensor $X$ and an exponent parameter *exponent*, which can be a scalar or another tensor. As output, it produces a single output data tensor $Y$, where the function $f(x) = x^{exponent}$ has been applied to $X$ elementwise.
+
+Github Links:
+
+- https://github.com/pytorch/pytorch/blob/master/caffe2/operators/pow_op.h
+- https://github.com/pytorch/pytorch/blob/master/caffe2/operators/pow_op.cc
+
+
+<details>
+
+<summary> <b>Example</b> </summary>
+
+**Code**
+
+```
+
+workspace.ResetWorkspace()
+
+op = core.CreateOperator(
+    "Pow",
+    ["X", "exponent"],
+    ["Y"],
+    broadcast=1
+)
+
+workspace.FeedBlob("X", np.array([1,2,3,4,5,6]).astype(np.float32))
+print("X: ", workspace.FetchBlob("X"))
+
+workspace.FeedBlob("exponent", np.array([2]).astype(np.float32))
+print("exponent: ", workspace.FetchBlob("exponent"))
+
+workspace.RunOperatorOnce(op)
+print("Y: ", workspace.FetchBlob("Y"))
+
+```
+
+**Result**
+
+```
+
+X:  [1. 2. 3. 4. 5. 6.]
+exponent:  [2.]
+Y:  [ 1.  4.  9. 16. 25. 36.]
+
+```
+
+</details>
+
+
 )DOC")
-    .Input(0, "X", "Input tensor of any shape")
-    .Input(1, "exponent", "The exponent of the power function.")
-    .Output(0, "Y", "Output tensor (same size as X)");
+    .Input(0, "X", "Input data blob to be operated on.")
+    .Input(1, "exponent", "Exponent blob containing the exponent(s) for calculation. Do not use if setting exponent via argument.")
+    .Output(0, "Y", "Output data blob with the same shape as the input.")
+    .Arg("exponent", "The exponent of the power function. Do not use if setting exponent via input.")
+    .Arg("axis", "*(type: int; default: -1)*")
+    .Arg("broadcast", "*(type: bool; default: False)*");
 
 class GetPowGradient : public GradientMakerBase {
   using GradientMakerBase::GradientMakerBase;

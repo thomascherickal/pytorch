@@ -1,13 +1,14 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
+
+
+
+
 
 from caffe2.python.dataio import (
     CompositeReader,
     CompositeReaderBuilder,
     Reader,
     ReaderBuilder,
+    ReaderWithDelay,
     ReaderWithLimit,
     ReaderWithTimeLimit,
 )
@@ -53,26 +54,6 @@ def make_destination_dataset(ws, schema, name=None):
     return dst_ds
 
 
-class ReaderWithDelay(Reader):
-    """Test reader class that inserts a delay between reading batches."""
-    def __init__(self, reader, delay):
-        Reader.__init__(self, schema=reader._schema)
-        self.reader = reader
-        self.delay = delay
-
-    def setup_ex(self, global_init_net, global_finish_net):
-        self.reader.setup_ex(global_init_net, global_finish_net)
-
-    def read_ex(self, local_init_net, local_finish_net):
-        read_net = core.Net('reader_body')
-
-        def sleep_op(*args, **argd):
-            time.sleep(self.delay)
-
-        read_net.Python(sleep_op)([], [])
-        return ([read_net], ) + self.reader.read(read_net)
-
-
 class TestReaderBuilder(ReaderBuilder):
     def __init__(self, name, size, offset):
         self._schema = schema.Struct(
@@ -89,6 +70,7 @@ class TestReaderBuilder(ReaderBuilder):
     def setup(self, ws):
         self._src_ds = make_source_dataset(ws, offset=self._offset, size=self._size,
                                     name=self._name)
+        return {}
 
     def new_reader(self, **kwargs):
         return self._src_ds
@@ -111,7 +93,7 @@ class TestCompositeReader(TestCase):
         for d, offset in zip(data, offsets):
             npt.assert_array_equal(d, range(offset, offset + size))
 
-        # Make an identically-sized empty destnation dataset
+        # Make an identically-sized empty destination dataset
         dst_ds_schema = schema.Struct(
             *[
                 (name, src_ds.content().clone_schema())
@@ -144,7 +126,7 @@ class TestCompositeReader(TestCase):
             for (name, offset) in zip(names, offsets)
         ]
 
-        # Make an identically-sized empty destnation dataset
+        # Make an identically-sized empty destination dataset
         dst_ds_schema = schema.Struct(
             *[
                 (name, src_ds_builder.schema())
@@ -232,6 +214,7 @@ class TestReaderWithLimit(TestCase):
         return ws, session, src_ds, dst_ds
 
     def _test_limit_reader_shared(self, reader_class, size, expected_read_len,
+                                  expected_read_len_threshold,
                                   expected_finish, num_threads, read_delay,
                                   **limiter_args):
         ws, session, src_ds, dst_ds = \
@@ -250,10 +233,18 @@ class TestReaderWithLimit(TestCase):
             pipe(reader, dst_ds.writer(), num_runtime_threads=num_threads)
         session.run(tg)
         read_len = len(sorted(ws.blobs[str(dst_ds.content().label())].fetch()))
-        self.assertEqual(read_len, expected_read_len)
+
+        # Do a fuzzy match (expected_read_len +/- expected_read_len_threshold)
+        # to eliminate flakiness for time-limited tests
+        self.assertGreaterEqual(
+            read_len,
+            expected_read_len - expected_read_len_threshold)
+        self.assertLessEqual(
+            read_len,
+            expected_read_len + expected_read_len_threshold)
         self.assertEqual(
             sorted(ws.blobs[str(dst_ds.content().label())].fetch()),
-            list(range(expected_read_len))
+            list(range(read_len))
         )
         self.assertEqual(ws.blobs[str(reader.data_finished())].fetch(),
                          expected_finish)
@@ -263,6 +254,7 @@ class TestReaderWithLimit(TestCase):
         self._test_limit_reader_shared(ReaderWithLimit,
                                        size=100,
                                        expected_read_len=100,
+                                       expected_read_len_threshold=0,
                                        expected_finish=True,
                                        num_threads=8,
                                        read_delay=0,
@@ -273,6 +265,7 @@ class TestReaderWithLimit(TestCase):
         self._test_limit_reader_shared(ReaderWithLimit,
                                        size=100,
                                        expected_read_len=0,
+                                       expected_read_len_threshold=0,
                                        expected_finish=False,
                                        num_threads=8,
                                        read_delay=0,
@@ -283,6 +276,7 @@ class TestReaderWithLimit(TestCase):
         self._test_limit_reader_shared(ReaderWithLimit,
                                        size=100,
                                        expected_read_len=10,
+                                       expected_read_len_threshold=0,
                                        expected_finish=False,
                                        num_threads=8,
                                        read_delay=0,
@@ -293,6 +287,7 @@ class TestReaderWithLimit(TestCase):
         self._test_limit_reader_shared(ReaderWithLimit,
                                        size=100,
                                        expected_read_len=100,
+                                       expected_read_len_threshold=0,
                                        expected_finish=True,
                                        num_threads=8,
                                        read_delay=0,
@@ -303,6 +298,7 @@ class TestReaderWithLimit(TestCase):
         self._test_limit_reader_shared(ReaderWithTimeLimit,
                                        size=100,
                                        expected_read_len=100,
+                                       expected_read_len_threshold=0,
                                        expected_finish=True,
                                        num_threads=8,
                                        read_delay=0.1,
@@ -318,9 +314,16 @@ class TestReaderWithLimit(TestCase):
         # Because the time limit check happens before the delay + read op,
         # subtract a little bit of time to ensure we don't get in an extra read
         duration = duration - 0.25 * sleep_duration
+
+        # NOTE: `expected_read_len_threshold` was added because this test case
+        # has significant execution variation under stress. Under stress, we may
+        # read strictly less than the expected # of samples; anywhere from
+        # [0,N] where N = expected_read_len.
+        # Hence we set expected_read_len to N/2, plus or minus N/2.
         self._test_limit_reader_shared(ReaderWithTimeLimit,
                                        size=size,
-                                       expected_read_len=expected_read_len,
+                                       expected_read_len=expected_read_len / 2,
+                                       expected_read_len_threshold=expected_read_len / 2,
                                        expected_finish=False,
                                        num_threads=num_threads,
                                        read_delay=sleep_duration,
@@ -328,13 +331,16 @@ class TestReaderWithLimit(TestCase):
 
     def test_time_limit_reader_with_long_limit(self):
         # Read with ample time limit
+        # NOTE: we don't use `expected_read_len_threshold` because the duration,
+        # read_delay, and # threads should be more than sufficient
         self._test_limit_reader_shared(ReaderWithTimeLimit,
                                        size=50,
                                        expected_read_len=50,
+                                       expected_read_len_threshold=0,
                                        expected_finish=True,
                                        num_threads=4,
-                                       read_delay=0.25,
-                                       duration=6)
+                                       read_delay=0.2,
+                                       duration=10)
 
 
 class TestDBFileReader(TestCase):
@@ -375,6 +381,7 @@ class TestDBFileReader(TestCase):
 
         return ws.blobs[str(dst_ds.content().label())].fetch()
 
+    @unittest.skipIf("LevelDB" not in core.C.registered_dbs(), "Need LevelDB")
     def test_cached_reader(self):
         ws = workspace.C.Workspace()
         session = LocalSession(ws)
@@ -382,7 +389,7 @@ class TestDBFileReader(TestCase):
 
         # Read data for the first time.
         cached_reader1 = CachedReader(
-            self._build_source_reader(ws, 100), db_path,
+            self._build_source_reader(ws, 100), db_path, loop_over=False,
         )
         build_cache_step = cached_reader1.build_cache_step()
         session.run(build_cache_step)
@@ -391,7 +398,6 @@ class TestDBFileReader(TestCase):
         self.assertEqual(sorted(data), list(range(100)))
 
         # Read data from cache.
-        workspace.ResetWorkspace()
         cached_reader2 = CachedReader(
             self._build_source_reader(ws, 200), db_path,
         )
@@ -404,7 +410,6 @@ class TestDBFileReader(TestCase):
         self._delete_path(db_path)
 
         # We removed cache so we expect to receive data from original reader.
-        workspace.ResetWorkspace()
         cached_reader3 = CachedReader(
             self._build_source_reader(ws, 300), db_path,
         )
@@ -416,6 +421,7 @@ class TestDBFileReader(TestCase):
 
         self._delete_path(db_path)
 
+    @unittest.skipIf("LevelDB" not in core.C.registered_dbs(), "Need LevelDB")
     def test_db_file_reader(self):
         ws = workspace.C.Workspace()
         session = LocalSession(ws)
@@ -431,7 +437,6 @@ class TestDBFileReader(TestCase):
         session.run(build_cache_step)
 
         # Read data from cache DB file.
-        workspace.ResetWorkspace()
         db_file_reader = DBFileReader(
             db_path=db_path,
             db_type='LevelDB',

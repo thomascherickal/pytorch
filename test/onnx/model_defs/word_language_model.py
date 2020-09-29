@@ -3,7 +3,6 @@
 
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
 
 
 class RNNModel(nn.Module):
@@ -21,7 +20,7 @@ class RNNModel(nn.Module):
                 nonlinearity = {'RNN_TANH': 'tanh', 'RNN_RELU': 'relu'}[rnn_type]
             except KeyError:
                 raise ValueError("""An invalid option for `--model` was supplied,
-                                 options are ['LSTM', 'GRU', 'RNN_TANH' or 'RNN_RELU']""")
+                                 options are ['LSTM', 'GRU', 'RNN_TANH' or 'RNN_RELU']""") from None
             self.rnn = nn.RNN(ninp, nhid, nlayers, nonlinearity=nonlinearity, dropout=dropout)
         self.decoder = nn.Linear(nhid, ntoken)
 
@@ -68,7 +67,7 @@ class RNNModel(nn.Module):
     def init_hidden(self, bsz):
         weight = next(self.parameters()).data
         if self.rnn_type == 'LSTM':
-            return (Variable(weight.new(self.nlayers, bsz, self.nhid).zero_()),
-                    Variable(weight.new(self.nlayers, bsz, self.nhid).zero_()))
+            return (weight.new(self.nlayers, bsz, self.nhid).zero_(),
+                    weight.new(self.nlayers, bsz, self.nhid).zero_())
         else:
-            return Variable(weight.new(self.nlayers, bsz, self.nhid).zero_())
+            return weight.new(self.nlayers, bsz, self.nhid).zero_()

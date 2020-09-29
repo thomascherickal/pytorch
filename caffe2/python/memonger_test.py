@@ -1,7 +1,7 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
+
+
+
+
 
 import numpy as np
 
@@ -38,7 +38,7 @@ class MemongerTest(hu.HypothesisTestCase):
            batch_size=st.integers(min_value=1, max_value=10),
            do=st.sampled_from(hu.device_options),
            algo=st.sampled_from(memonger.AssignmentAlgorithm))
-    @settings(max_examples=5, timeout=120)
+    @settings(max_examples=5, deadline=None)
     def test_simple_memonger(self, input_dim, output_dim, batch_size, do, algo):
         m = model_helper.ModelHelper()
         fc1 = brew.fc(m, "data", "fc1", dim_in=input_dim, dim_out=output_dim)
@@ -91,7 +91,7 @@ class MemongerTest(hu.HypothesisTestCase):
            output_dim=st.integers(min_value=1, max_value=10),
            batch_size=st.integers(min_value=1, max_value=10),
            do=st.sampled_from(hu.device_options))
-    @settings(max_examples=5, timeout=120)
+    @settings(max_examples=5, deadline=None)
     def test_fast_memonger(self, input_dim, output_dim, batch_size, do):
         m = model_helper.ModelHelper()
         fc1 = brew.fc(m, "data", "fc1", dim_in=input_dim, dim_out=output_dim)
@@ -229,7 +229,7 @@ class MemongerTest(hu.HypothesisTestCase):
         Check that memonger does not make blobs cross CPU/GPU boundary
         '''
         m = model_helper.ModelHelper()
-        with core.DeviceScope(core.DeviceOption(caffe2_pb2.CUDA, 0)):
+        with core.DeviceScope(core.DeviceOption(workspace.GpuDeviceType, 0)):
             fc1 = brew.fc(m, "data", "fc1", dim_in=2, dim_out=2)
             fc2 = brew.fc(m, fc1, "fc2", dim_in=2, dim_out=2)
             fc3 = brew.fc(m, fc2, "fc3", dim_in=2, dim_out=2)
@@ -259,7 +259,7 @@ class MemongerTest(hu.HypothesisTestCase):
 
         # Create set of blobs on CPU side and GPU side and check they don't
         # overlap
-        device_blobs = {caffe2_pb2.CPU: set(), caffe2_pb2.CUDA: set()}
+        device_blobs = {caffe2_pb2.CPU: set(), workspace.GpuDeviceType: set()}
         for op in optim_proto.op:
             if op.type not in ['CopyCPUToGPU', "CopyGPUToCPU"]:
                 dev = op.device_option.device_type
@@ -267,13 +267,14 @@ class MemongerTest(hu.HypothesisTestCase):
                     device_blobs[dev].add(b)
 
         device_crossers = device_blobs[caffe2_pb2.CPU].intersection(
-            device_blobs[caffe2_pb2.CUDA]
+            device_blobs[workspace.GpuDeviceType]
         )
         self.assertEquals(device_crossers, set())
 
     @given(input_dim=st.integers(min_value=4, max_value=4),
            output_dim=st.integers(min_value=4, max_value=4),
            batch_size=st.integers(min_value=4, max_value=4))
+    @settings(deadline=1000)
     def test_gradient_optim_tree(self, input_dim, output_dim, batch_size):
         m = model_helper.ModelHelper()
         with core.NameScope("name_x"):
@@ -331,6 +332,7 @@ class MemongerTest(hu.HypothesisTestCase):
     @given(input_dim=st.integers(min_value=4, max_value=4),
            output_dim=st.integers(min_value=4, max_value=4),
            batch_size=st.integers(min_value=4, max_value=4))
+    @settings(deadline=1000)
     def test_forward_optim_tree_daggy(self, input_dim, output_dim, batch_size):
         m = model_helper.ModelHelper()
         m.Proto().type = "dag"
@@ -387,6 +389,7 @@ class MemongerTest(hu.HypothesisTestCase):
     @given(input_dim=st.integers(min_value=4, max_value=4),
            output_dim=st.integers(min_value=4, max_value=4),
            batch_size=st.integers(min_value=4, max_value=4))
+    @settings(deadline=10000)
     def test_forward_optim_tree_harder(self, input_dim, output_dim, batch_size):
         m = model_helper.ModelHelper()
         m.net.Proto().type = "dag"

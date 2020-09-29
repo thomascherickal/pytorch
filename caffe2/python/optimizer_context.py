@@ -1,9 +1,9 @@
 ## @package optimizer_context
 # Module caffe2.python.optimizer_context
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
+
+
+
+
 
 from caffe2.python import context
 from caffe2.python.modifier_context import (
@@ -44,7 +44,7 @@ class UseOptimizer(UseModifierBase):
             with UseOptimizer(optim2):
                 brew.func
 
-    Example useage with layer:
+    Example usage with layer:
         optimizers = {'optim1': optim1, 'optim2': optim2}
         with Optimizers(optimizers):
             optim = OptimizerContext.current().get_optimizer('optim1')

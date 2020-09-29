@@ -76,6 +76,12 @@ install_centos() {
           python34-setuptools
       PYTHON=python3
       ;;
+    3.6)
+      yum install -y \
+          python36-devel \
+          python36-setuptools
+      PYTHON=python3
+      ;;
     *)
       echo "Invalid PYTHON_VERSION..."
       exit 1
@@ -148,15 +154,18 @@ pip install --no-cache-dir \
     future \
     hypothesis \
     jupyter \
-    numpy \
+    numpy==1.18.5 \
     protobuf \
     pytest \
     pyyaml \
-    scipy==0.19.1 \
+    scipy==1.1.0 \
     scikit-image \
     tabulate \
     virtualenv \
     mock \
     typing \
-    typing-extensions
+    typing-extensions \
+    pyyaml \
+    librosa>=0.6.2 \
+    psutil
 

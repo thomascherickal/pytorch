@@ -1,43 +1,118 @@
 # ---[ cuda
 
-set(CAFFE2_FOUND_CUDA FALSE)
+# Poor man's include guard
+if(TARGET torch::cudart)
+  return()
+endif()
 
-# Find Cuda.
-find_package(CUDA 7.0)
+# sccache is only supported in CMake master and not in the newest official
+# release (3.11.3) yet. Hence we need our own Modules_CUDA_fix to enable sccache.
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR}/../Modules_CUDA_fix)
+
+# We don't want to statically link cudart, because we rely on it's dynamic linkage in
+# python (follow along torch/cuda/__init__.py and usage of cudaGetErrorName).
+# Technically, we can link cudart here statically, and link libtorch_python.so
+# to a dynamic libcudart.so, but that's just wasteful.
+# However, on Windows, if this one gets switched off, the error "cuda: unknown error"
+# will be raised when running the following code:
+# >>> import torch
+# >>> torch.cuda.is_available()
+# >>> torch.cuda.current_device()
+# More details can be found in the following links.
+# https://github.com/pytorch/pytorch/issues/20635
+# https://github.com/pytorch/pytorch/issues/17108
+if(NOT MSVC)
+  set(CUDA_USE_STATIC_CUDA_RUNTIME OFF CACHE INTERNAL "")
+endif()
+
+# Find CUDA.
+find_package(CUDA)
 if(NOT CUDA_FOUND)
   message(WARNING
-      "Caffe2: Cuda cannot be found. Depending on whether you are building "
-      "Caffe2 or a Caffe2 dependent library, the next warning / error will "
-      "give you more info.")
+    "Caffe2: CUDA cannot be found. Depending on whether you are building "
+    "Caffe2 or a Caffe2 dependent library, the next warning / error will "
+    "give you more info.")
+  set(CAFFE2_USE_CUDA OFF)
   return()
 endif()
+message(STATUS "Caffe2: CUDA detected: " ${CUDA_VERSION})
+message(STATUS "Caffe2: CUDA nvcc is: " ${CUDA_NVCC_EXECUTABLE})
+message(STATUS "Caffe2: CUDA toolkit directory: " ${CUDA_TOOLKIT_ROOT_DIR})
+if(CUDA_VERSION VERSION_LESS 9.0)
+  message(FATAL_ERROR "PyTorch requires CUDA 9.0 and above.")
+endif()
 
-# Find cudnn.
-if(CAFFE2_STATIC_LINK_CUDA)
-  SET(CUDNN_LIBNAME "libcudnn_static.a")
+if(CUDA_FOUND)
+  # Sometimes, we may mismatch nvcc with the CUDA headers we are
+  # compiling with, e.g., if a ccache nvcc is fed to us by CUDA_NVCC_EXECUTABLE
+  # but the PATH is not consistent with CUDA_HOME.  It's better safe
+  # than sorry: make sure everything is consistent.
+  if(MSVC AND CMAKE_GENERATOR MATCHES "Visual Studio")
+    # When using Visual Studio, it attempts to lock the whole binary dir when
+    # `try_run` is called, which will cause the build to fail.
+    string(RANDOM BUILD_SUFFIX)
+    set(PROJECT_RANDOM_BINARY_DIR "${PROJECT_BINARY_DIR}/${BUILD_SUFFIX}")
+  else()
+    set(PROJECT_RANDOM_BINARY_DIR "${PROJECT_BINARY_DIR}")
+  endif()
+  set(file "${PROJECT_BINARY_DIR}/detect_cuda_version.cc")
+  file(WRITE ${file} ""
+    "#include <cuda.h>\n"
+    "#include <cstdio>\n"
+    "int main() {\n"
+    "  printf(\"%d.%d\", CUDA_VERSION / 1000, (CUDA_VERSION / 10) % 100);\n"
+    "  return 0;\n"
+    "}\n"
+    )
+  try_run(run_result compile_result ${PROJECT_RANDOM_BINARY_DIR} ${file}
+    CMAKE_FLAGS "-DINCLUDE_DIRECTORIES=${CUDA_INCLUDE_DIRS}"
+    LINK_LIBRARIES ${CUDA_LIBRARIES}
+    RUN_OUTPUT_VARIABLE cuda_version_from_header
+    COMPILE_OUTPUT_VARIABLE output_var
+    )
+  if(NOT compile_result)
+    message(FATAL_ERROR "Caffe2: Couldn't determine version from header: " ${output_var})
+  endif()
+  message(STATUS "Caffe2: Header version is: " ${cuda_version_from_header})
+  if(NOT cuda_version_from_header STREQUAL ${CUDA_VERSION_STRING})
+    # Force CUDA to be processed for again next time
+    # TODO: I'm not sure if this counts as an implementation detail of
+    # FindCUDA
+    set(${cuda_version_from_findcuda} ${CUDA_VERSION_STRING})
+    unset(CUDA_TOOLKIT_ROOT_DIR_INTERNAL CACHE)
+    # Not strictly necessary, but for good luck.
+    unset(CUDA_VERSION CACHE)
+    # Error out
+    message(FATAL_ERROR "FindCUDA says CUDA version is ${cuda_version_from_findcuda} (usually determined by nvcc), "
+      "but the CUDA headers say the version is ${cuda_version_from_header}.  This often occurs "
+      "when you set both CUDA_HOME and CUDA_NVCC_EXECUTABLE to "
+      "non-standard locations, without also setting PATH to point to the correct nvcc.  "
+      "Perhaps, try re-running this command again with PATH=${CUDA_TOOLKIT_ROOT_DIR}/bin:$PATH.  "
+      "See above log messages for more diagnostics, and see https://github.com/pytorch/pytorch/issues/8092 for more details.")
+  endif()
+endif()
+
+# Find cuDNN.
+if(CAFFE2_STATIC_LINK_CUDA AND NOT USE_STATIC_CUDNN)
+  message(WARNING "cuDNN will be linked statically because CAFFE2_STATIC_LINK_CUDA is ON. "
+    "Set USE_STATIC_CUDNN to ON to suppress this warning.")
+endif()
+if(CAFFE2_STATIC_LINK_CUDA OR USE_STATIC_CUDNN)
+  set(CUDNN_STATIC ON CACHE BOOL "")
 else()
-  SET(CUDNN_LIBNAME "cudnn")
+  set(CUDNN_STATIC OFF CACHE BOOL "")
 endif()
-include(FindPackageHandleStandardArgs)
-set(CUDNN_ROOT_DIR "" CACHE PATH "Folder contains NVIDIA cuDNN")
-find_path(CUDNN_INCLUDE_DIR cudnn.h
-    HINTS ${CUDNN_ROOT_DIR} ${CUDA_TOOLKIT_ROOT_DIR}
-    PATH_SUFFIXES cuda/include include)
-find_library(CUDNN_LIBRARY ${CUDNN_LIBNAME}
-    HINTS ${CUDNN_ROOT_DIR} ${CUDA_TOOLKIT_ROOT_DIR}
-    PATH_SUFFIXES lib lib64 cuda/lib cuda/lib64 lib/x64)
-find_package_handle_standard_args(
-    CUDNN DEFAULT_MSG CUDNN_INCLUDE_DIR CUDNN_LIBRARY)
 
-if(NOT CUDNN_FOUND)
+find_package(CUDNN)
+
+if(CAFFE2_USE_CUDNN AND NOT CUDNN_FOUND)
   message(WARNING
-      "Caffe2: cudnn cannot be found. Caffe2 CUDA depends explicitly "
-      "on cudnn so you should consider installing it.")
-  return()
+    "Caffe2: Cannot find cuDNN library. Turning the option off")
+  set(CAFFE2_USE_CUDNN OFF)
 endif()
 
 # Optionally, find TensorRT
-if (${USE_TENSORRT})
+if(CAFFE2_USE_TENSORRT)
   find_path(TENSORRT_INCLUDE_DIR NvInfer.h
     HINTS ${TENSORRT_ROOT} ${CUDA_TOOLKIT_ROOT_DIR}
     PATH_SUFFIXES include)
@@ -46,40 +121,61 @@ if (${USE_TENSORRT})
     PATH_SUFFIXES lib lib64 lib/x64)
   find_package_handle_standard_args(
     TENSORRT DEFAULT_MSG TENSORRT_INCLUDE_DIR TENSORRT_LIBRARY)
-  if(NOT TENSORRT_FOUND)
-    message(WARNING 
-      "Caffe2: Cannot find TensorRT library. Turning the option off")
-    set(USE_TENSORRT OFF)
+  if(TENSORRT_FOUND)
+    execute_process(COMMAND /bin/sh -c "[ -r \"${TENSORRT_INCLUDE_DIR}/NvInferVersion.h\" ] && awk '/^\#define NV_TENSORRT_MAJOR/ {print $3}' \"${TENSORRT_INCLUDE_DIR}/NvInferVersion.h\"" OUTPUT_VARIABLE TENSORRT_VERSION_MAJOR)
+    execute_process(COMMAND /bin/sh -c "[ -r \"${TENSORRT_INCLUDE_DIR}/NvInferVersion.h\" ] && awk '/^\#define NV_TENSORRT_MINOR/ {print $3}' \"${TENSORRT_INCLUDE_DIR}/NvInferVersion.h\"" OUTPUT_VARIABLE TENSORRT_VERSION_MINOR)
+    if(TENSORRT_VERSION_MAJOR)
+      string(STRIP ${TENSORRT_VERSION_MAJOR} TENSORRT_VERSION_MAJOR)
+      string(STRIP ${TENSORRT_VERSION_MINOR} TENSORRT_VERSION_MINOR)
+      set(TENSORRT_VERSION "${TENSORRT_VERSION_MAJOR}.${TENSORRT_VERSION_MINOR}")
+      #CAFFE2_USE_TRT is set in Dependencies
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DTENSORRT_VERSION_MAJOR=${TENSORRT_VERSION_MAJOR}")
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DTENSORRT_VERSION_MINOR=${TENSORRT_VERSION_MINOR}")
+    else()
+      message(WARNING "Caffe2: Cannot find ${TENSORRT_INCLUDE_DIR}/NvInferVersion.h. Assuming TRT 5.0 which is no longer supported. Turning the option off.")
+      set(CAFFE2_USE_TENSORRT OFF)
+    endif()
+  else()
+    message(WARNING
+      "Caffe2: Cannot find TensorRT library. Turning the option off.")
+    set(CAFFE2_USE_TENSORRT OFF)
   endif()
 endif()
 
-# After both cuda and cudnn are found, we can safely proceed.
-set(CAFFE2_FOUND_CUDA TRUE)
-message(STATUS "Caffe2: CUDA detected: " ${CUDA_VERSION})
-# get cuDNN version
-file(READ ${CUDNN_INCLUDE_DIR}/cudnn.h CUDNN_HEADER_CONTENTS)
-string(REGEX MATCH "define CUDNN_MAJOR * +([0-9]+)"
-             CUDNN_VERSION_MAJOR "${CUDNN_HEADER_CONTENTS}")
-string(REGEX REPLACE "define CUDNN_MAJOR * +([0-9]+)" "\\1"
-             CUDNN_VERSION_MAJOR "${CUDNN_VERSION_MAJOR}")
-string(REGEX MATCH "define CUDNN_MINOR * +([0-9]+)"
-             CUDNN_VERSION_MINOR "${CUDNN_HEADER_CONTENTS}")
-string(REGEX REPLACE "define CUDNN_MINOR * +([0-9]+)" "\\1"
-             CUDNN_VERSION_MINOR "${CUDNN_VERSION_MINOR}")
-string(REGEX MATCH "define CUDNN_PATCHLEVEL * +([0-9]+)"
-             CUDNN_VERSION_PATCH "${CUDNN_HEADER_CONTENTS}")
-string(REGEX REPLACE "define CUDNN_PATCHLEVEL * +([0-9]+)" "\\1"
-             CUDNN_VERSION_PATCH "${CUDNN_VERSION_PATCH}")
-# Assemble cuDNN version
-if(NOT CUDNN_VERSION_MAJOR)
-  set(CUDNN_VERSION "?")
-else()
-  set(CUDNN_VERSION
-      "${CUDNN_VERSION_MAJOR}.${CUDNN_VERSION_MINOR}.${CUDNN_VERSION_PATCH}")
+# ---[ Extract versions
+if(CAFFE2_USE_CUDNN)
+  # Get cuDNN version
+  if(EXISTS ${CUDNN_INCLUDE_PATH}/cudnn_version.h)
+    file(READ ${CUDNN_INCLUDE_PATH}/cudnn_version.h CUDNN_HEADER_CONTENTS)
+  else()
+    file(READ ${CUDNN_INCLUDE_PATH}/cudnn.h CUDNN_HEADER_CONTENTS)
+  endif()
+  string(REGEX MATCH "define CUDNN_MAJOR * +([0-9]+)"
+               CUDNN_VERSION_MAJOR "${CUDNN_HEADER_CONTENTS}")
+  string(REGEX REPLACE "define CUDNN_MAJOR * +([0-9]+)" "\\1"
+               CUDNN_VERSION_MAJOR "${CUDNN_VERSION_MAJOR}")
+  string(REGEX MATCH "define CUDNN_MINOR * +([0-9]+)"
+               CUDNN_VERSION_MINOR "${CUDNN_HEADER_CONTENTS}")
+  string(REGEX REPLACE "define CUDNN_MINOR * +([0-9]+)" "\\1"
+               CUDNN_VERSION_MINOR "${CUDNN_VERSION_MINOR}")
+  string(REGEX MATCH "define CUDNN_PATCHLEVEL * +([0-9]+)"
+               CUDNN_VERSION_PATCH "${CUDNN_HEADER_CONTENTS}")
+  string(REGEX REPLACE "define CUDNN_PATCHLEVEL * +([0-9]+)" "\\1"
+               CUDNN_VERSION_PATCH "${CUDNN_VERSION_PATCH}")
+  # Assemble cuDNN version
+  if(NOT CUDNN_VERSION_MAJOR)
+    set(CUDNN_VERSION "?")
+  else()
+    set(CUDNN_VERSION
+        "${CUDNN_VERSION_MAJOR}.${CUDNN_VERSION_MINOR}.${CUDNN_VERSION_PATCH}")
+  endif()
+  message(STATUS "Found cuDNN: v${CUDNN_VERSION}  (include: ${CUDNN_INCLUDE_PATH}, library: ${CUDNN_LIBRARY_PATH})")
+  if(CUDNN_VERSION VERSION_LESS "7.0.0")
+    message(FATAL_ERROR "PyTorch requires cuDNN 7 and above.")
+  endif()
 endif()
 
-message(STATUS "Found cuDNN: v${CUDNN_VERSION}  (include: ${CUDNN_INCLUDE_DIR}, library: ${CUDNN_LIBRARY})")
-# ---[ Cuda Libraries wrapper
+# ---[ CUDA libraries wrapper
 
 # find libcuda.so and lbnvrtc.so
 # For libcuda.so, we will find it under lib, lib64, and then the
@@ -110,36 +206,90 @@ set_property(
 
 # cudart. CUDA_LIBRARIES is actually a list, so we will make an interface
 # library.
-add_library(caffe2::cudart INTERFACE IMPORTED)
+add_library(torch::cudart INTERFACE IMPORTED)
 if(CAFFE2_STATIC_LINK_CUDA)
     set_property(
-        TARGET caffe2::cudart PROPERTY INTERFACE_LINK_LIBRARIES
-        "${CUDA_TOOLKIT_ROOT_DIR}/lib64/libcudart_static.a")
+        TARGET torch::cudart PROPERTY INTERFACE_LINK_LIBRARIES
+        "${CUDA_cudart_static_LIBRARY}")
+    if(NOT WIN32)
+      set_property(
+          TARGET torch::cudart APPEND PROPERTY INTERFACE_LINK_LIBRARIES
+          rt dl)
+    endif()
 else()
     set_property(
-        TARGET caffe2::cudart PROPERTY INTERFACE_LINK_LIBRARIES
+        TARGET torch::cudart PROPERTY INTERFACE_LINK_LIBRARIES
         ${CUDA_LIBRARIES})
 endif()
 set_property(
-    TARGET caffe2::cudart PROPERTY INTERFACE_INCLUDE_DIRECTORIES
+    TARGET torch::cudart PROPERTY INTERFACE_INCLUDE_DIRECTORIES
     ${CUDA_INCLUDE_DIRS})
+
+# nvToolsExt
+add_library(torch::nvtoolsext INTERFACE IMPORTED)
+if(MSVC)
+  if(NOT NVTOOLEXT_HOME)
+    set(NVTOOLEXT_HOME "C:/Program Files/NVIDIA Corporation/NvToolsExt")
+  endif()
+  if(DEFINED ENV{NVTOOLSEXT_PATH})
+    set(NVTOOLEXT_HOME $ENV{NVTOOLSEXT_PATH})
+    file(TO_CMAKE_PATH ${NVTOOLEXT_HOME} NVTOOLEXT_HOME)
+  endif()
+  set_target_properties(
+      torch::nvtoolsext PROPERTIES
+      INTERFACE_LINK_LIBRARIES ${NVTOOLEXT_HOME}/lib/x64/nvToolsExt64_1.lib
+      INTERFACE_INCLUDE_DIRECTORIES ${NVTOOLEXT_HOME}/include)
+
+elseif(APPLE)
+  set_property(
+      TARGET torch::nvtoolsext PROPERTY INTERFACE_LINK_LIBRARIES
+      ${CUDA_TOOLKIT_ROOT_DIR}/lib/libnvrtc.dylib
+      ${CUDA_TOOLKIT_ROOT_DIR}/lib/libnvToolsExt.dylib)
+
+else()
+  find_library(LIBNVTOOLSEXT libnvToolsExt.so PATHS ${CUDA_TOOLKIT_ROOT_DIR}/lib64/)
+  set_property(
+      TARGET torch::nvtoolsext PROPERTY INTERFACE_LINK_LIBRARIES
+      ${LIBNVTOOLSEXT})
+endif()
 
 # cudnn
 # static linking is handled by USE_STATIC_CUDNN environment variable
-add_library(caffe2::cudnn UNKNOWN IMPORTED)
-set_property(
-    TARGET caffe2::cudnn PROPERTY IMPORTED_LOCATION
-    ${CUDNN_LIBRARY})
-set_property(
-    TARGET caffe2::cudnn PROPERTY INTERFACE_INCLUDE_DIRECTORIES
-    ${CUDNN_INCLUDE_DIR})
+if(CAFFE2_USE_CUDNN)
+  add_library(caffe2::cudnn UNKNOWN IMPORTED)
+  set_property(
+      TARGET caffe2::cudnn PROPERTY IMPORTED_LOCATION
+      ${CUDNN_LIBRARY_PATH})
+  set_property(
+      TARGET caffe2::cudnn PROPERTY INTERFACE_INCLUDE_DIRECTORIES
+      ${CUDNN_INCLUDE_PATH})
+  if(CUDNN_STATIC AND NOT WIN32)
+    set_property(
+        TARGET caffe2::cudnn PROPERTY INTERFACE_LINK_LIBRARIES
+        "${CUDA_TOOLKIT_ROOT_DIR}/lib64/libculibos.a" dl)
+    # Lines below use target_link_libraries because we support cmake 3.5+.
+    # For cmake 3.13+, target_link_options to set INTERFACE_LINK_OPTIONS would be better.
+    # https://cmake.org/cmake/help/v3.5/command/target_link_libraries.html warns
+    # "Item names starting with -, but not -l or -framework, are treated as linker flags.
+    #  Note that such flags will be treated like any other library link item for purposes
+    #  of transitive dependencies, so they are generally safe to specify only as private
+    #  link items that will not propagate to dependents."
+    # Propagating to a dependent (torch_cuda) is exactly what we want here, so we are
+    # flouting the warning, but I can't think of a better (3.5+ compatible) way.
+    target_link_libraries(caffe2::cudnn INTERFACE
+        "-Wl,--exclude-libs,libcudnn_static.a")
+  endif()
+endif()
 
 # curand
 add_library(caffe2::curand UNKNOWN IMPORTED)
-if(CAFFE2_STATIC_LINK_CUDA)
+if(CAFFE2_STATIC_LINK_CUDA AND NOT WIN32)
     set_property(
         TARGET caffe2::curand PROPERTY IMPORTED_LOCATION
         "${CUDA_TOOLKIT_ROOT_DIR}/lib64/libcurand_static.a")
+    set_property(
+        TARGET caffe2::curand PROPERTY INTERFACE_LINK_LIBRARIES
+        "${CUDA_TOOLKIT_ROOT_DIR}/lib64/libculibos.a" dl)
 else()
     set_property(
         TARGET caffe2::curand PROPERTY IMPORTED_LOCATION
@@ -149,8 +299,25 @@ set_property(
     TARGET caffe2::curand PROPERTY INTERFACE_INCLUDE_DIRECTORIES
     ${CUDA_INCLUDE_DIRS})
 
+# cufft. CUDA_CUFFT_LIBRARIES is actually a list, so we will make an
+# interface library similar to cudart.
+add_library(caffe2::cufft INTERFACE IMPORTED)
+if(CAFFE2_STATIC_LINK_CUDA AND NOT WIN32)
+    set_property(
+        TARGET caffe2::cufft PROPERTY INTERFACE_LINK_LIBRARIES
+        "${CUDA_TOOLKIT_ROOT_DIR}/lib64/libcufft_static_nocallback.a"
+        "${CUDA_TOOLKIT_ROOT_DIR}/lib64/libculibos.a" dl)
+else()
+    set_property(
+        TARGET caffe2::cufft PROPERTY INTERFACE_LINK_LIBRARIES
+        ${CUDA_CUFFT_LIBRARIES})
+endif()
+set_property(
+    TARGET caffe2::cufft PROPERTY INTERFACE_INCLUDE_DIRECTORIES
+    ${CUDA_INCLUDE_DIRS})
+
 # TensorRT
-if(${USE_TENSORRT})
+if(CAFFE2_USE_TENSORRT)
   add_library(caffe2::tensorrt UNKNOWN IMPORTED)
   set_property(
       TARGET caffe2::tensorrt PROPERTY IMPORTED_LOCATION
@@ -163,10 +330,15 @@ endif()
 # cublas. CUDA_CUBLAS_LIBRARIES is actually a list, so we will make an
 # interface library similar to cudart.
 add_library(caffe2::cublas INTERFACE IMPORTED)
-if(CAFFE2_STATIC_LINK_CUDA)
+if(CAFFE2_STATIC_LINK_CUDA AND NOT WIN32)
     set_property(
         TARGET caffe2::cublas PROPERTY INTERFACE_LINK_LIBRARIES
         "${CUDA_TOOLKIT_ROOT_DIR}/lib64/libcublas_static.a")
+    if(CUDA_VERSION VERSION_GREATER_EQUAL 10.1)
+      set_property(
+        TARGET caffe2::cublas APPEND PROPERTY INTERFACE_LINK_LIBRARIES
+        "${CUDA_TOOLKIT_ROOT_DIR}/lib64/libcublasLt_static.a")
+    endif()
 else()
     set_property(
         TARGET caffe2::cublas PROPERTY INTERFACE_LINK_LIBRARIES
@@ -189,153 +361,6 @@ set_property(
 # now, Caffe2 only uses the above libraries, so we will only wrap
 # these.
 
-# ---[ Cuda flags
-
-# Known NVIDIA GPU achitectures Caffe2 can be compiled for.
-# Default is set to cuda 9. If we detect the cuda architectores to be less than
-# 9, we will lower it to the corresponding known archs.
-set(Caffe2_known_gpu_archs "30 35 50 52 60 61 70") # for CUDA 9.x
-set(Caffe2_known_gpu_archs8 "30 35 50 52 60 61") # for CUDA 8.x
-set(Caffe2_known_gpu_archs7 "30 35 50 52") # for CUDA 7.x
-
-################################################################################################
-# A function for automatic detection of GPUs installed  (if autodetection is enabled)
-# Usage:
-#   caffe2_detect_installed_gpus(out_variable)
-function(caffe2_detect_installed_gpus out_variable)
-  if(NOT CUDA_gpu_detect_output)
-    set(__cufile ${PROJECT_BINARY_DIR}/detect_cuda_archs.cu)
-
-    file(WRITE ${__cufile} ""
-      "#include <cstdio>\n"
-      "int main()\n"
-      "{\n"
-      "  int count = 0;\n"
-      "  if (cudaSuccess != cudaGetDeviceCount(&count)) return -1;\n"
-      "  if (count == 0) return -1;\n"
-      "  for (int device = 0; device < count; ++device)\n"
-      "  {\n"
-      "    cudaDeviceProp prop;\n"
-      "    if (cudaSuccess == cudaGetDeviceProperties(&prop, device))\n"
-      "      std::printf(\"%d.%d \", prop.major, prop.minor);\n"
-      "  }\n"
-      "  return 0;\n"
-      "}\n")
-
-    execute_process(COMMAND "${CUDA_NVCC_EXECUTABLE}" "-ccbin=${CUDA_HOST_COMPILER}" ${CUDA_NVCC_FLAGS} "--run" "${__cufile}"
-                    WORKING_DIRECTORY "${PROJECT_BINARY_DIR}/CMakeFiles/"
-                    RESULT_VARIABLE __nvcc_res OUTPUT_VARIABLE __nvcc_out
-                    ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
-
-    if(__nvcc_res EQUAL 0)
-      string(REPLACE "2.1" "2.1(2.0)" __nvcc_out "${__nvcc_out}")
-      set(CUDA_gpu_detect_output ${__nvcc_out} CACHE INTERNAL "Returned GPU architetures from caffe2_detect_installed_gpus tool" FORCE)
-    endif()
-  endif()
-
-  if(NOT CUDA_gpu_detect_output)
-    message(STATUS "Automatic GPU detection failed. Building for all known architectures.")
-    set(${out_variable} ${Caffe2_known_gpu_archs} PARENT_SCOPE)
-  else()
-    message(STATUS "Automatic GPU detection returned ${CUDA_gpu_detect_output}.")
-    set(${out_variable} ${CUDA_gpu_detect_output} PARENT_SCOPE)
-  endif()
-endfunction()
-
-
-################################################################################################
-# Function for selecting GPU arch flags for nvcc based on CUDA_ARCH_NAME
-# Usage:
-#   caffe_select_nvcc_arch_flags(out_variable)
-function(caffe2_select_nvcc_arch_flags out_variable)
-  # List of arch names
-  set(__archs_names "Kepler" "Maxwell" "Pascal" "Volta" "All" "Manual")
-  set(__archs_name_default "All")
-  if(NOT CMAKE_CROSSCOMPILING)   
-    list(APPEND __archs_names "Auto")   
-    set(__archs_name_default "Auto")    
-  endif()
-
-  # Set CUDA_ARCH_NAME strings (so it will be seen as dropbox in the CMake GUI)
-  set(CUDA_ARCH_NAME ${__archs_name_default} CACHE STRING "Select target NVIDIA GPU architecture.")
-  set_property(CACHE CUDA_ARCH_NAME PROPERTY STRINGS "" ${__archs_names})
-  mark_as_advanced(CUDA_ARCH_NAME)
-
-  # Verify CUDA_ARCH_NAME value
-  if(NOT ";${__archs_names};" MATCHES ";${CUDA_ARCH_NAME};")
-    string(REPLACE ";" ", " __archs_names "${__archs_names}")
-    message(FATAL_ERROR "Invalid CUDA_ARCH_NAME, supported values: ${__archs_names}. Got ${CUDA_ARCH_NAME}.")
-  endif()
-
-  if(${CUDA_ARCH_NAME} STREQUAL "Manual")
-    set(CUDA_ARCH_BIN "" CACHE STRING
-      "Specify GPU architectures to build binaries for (BIN(PTX) format is supported)")
-    set(CUDA_ARCH_PTX "" CACHE STRING
-      "Specify GPU architectures to build PTX intermediate code for")
-    mark_as_advanced(CUDA_ARCH_BIN CUDA_ARCH_PTX)
-  else()
-    unset(CUDA_ARCH_BIN CACHE)
-    unset(CUDA_ARCH_PTX CACHE)
-  endif()
-
-  if(${CUDA_ARCH_NAME} STREQUAL "Kepler")
-    set(__cuda_arch_bin "30 35")
-  elseif(${CUDA_ARCH_NAME} STREQUAL "Maxwell")
-    set(__cuda_arch_bin "50")
-  elseif(${CUDA_ARCH_NAME} STREQUAL "Pascal")
-    set(__cuda_arch_bin "60 61")
-  elseif(${CUDA_ARCH_NAME} STREQUAL "Volta")
-    set(__cuda_arch_bin "70")
-  elseif(${CUDA_ARCH_NAME} STREQUAL "All")
-    set(__cuda_arch_bin ${Caffe2_known_gpu_archs})
-  elseif(${CUDA_ARCH_NAME} STREQUAL "Manual")
-    set(__cuda_arch_bin ${CUDA_ARCH_BIN})
-    set(__cuda_arch_ptx ${CUDA_ARCH_PTX})
-  elseif(${CUDA_ARCH_NAME} STREQUAL "Auto")
-    caffe2_detect_installed_gpus(__cuda_arch_bin)
-  else()
-    message(FATAL_ERROR "Invalid CUDA_ARCH_NAME")
-  endif()
-
-  # Remove dots and convert to lists
-  string(REGEX REPLACE "\\." "" __cuda_arch_bin "${__cuda_arch_bin}")
-  string(REGEX REPLACE "\\." "" __cuda_arch_ptx "${__cuda_arch_ptx}")
-  string(REGEX MATCHALL "[0-9()]+" __cuda_arch_bin "${__cuda_arch_bin}")
-  string(REGEX MATCHALL "[0-9]+"   __cuda_arch_ptx "${__cuda_arch_ptx}")
-  list(REMOVE_DUPLICATES __cuda_arch_bin)
-  list(REMOVE_DUPLICATES __cuda_arch_ptx)
-
-  set(__nvcc_flags "")
-  set(__nvcc_archs_readable "")
-
-  # Tell NVCC to add binaries for the specified GPUs
-  foreach(__arch ${__cuda_arch_bin})
-    if(__arch MATCHES "([0-9]+)\\(([0-9]+)\\)")
-      # User explicitly specified PTX for the concrete BIN
-      list(APPEND __nvcc_flags -gencode arch=compute_${CMAKE_MATCH_2},code=sm_${CMAKE_MATCH_1})
-      list(APPEND __nvcc_archs_readable sm_${CMAKE_MATCH_1})
-    else()
-      # User didn't explicitly specify PTX for the concrete BIN, we assume PTX=BIN
-      list(APPEND __nvcc_flags -gencode arch=compute_${__arch},code=sm_${__arch})
-      list(APPEND __nvcc_archs_readable sm_${__arch})
-    endif()
-  endforeach()
-
-  # Tell NVCC to add PTX intermediate code for the specified architectures
-  foreach(__arch ${__cuda_arch_ptx})
-    list(APPEND __nvcc_flags -gencode arch=compute_${__arch},code=compute_${__arch})
-    list(APPEND __nvcc_archs_readable compute_${__arch})
-  endforeach()
-
-  string(REPLACE ";" " " __nvcc_archs_readable "${__nvcc_archs_readable}")
-  set(${out_variable}          ${__nvcc_flags}          PARENT_SCOPE)
-  set(${out_variable}_readable ${__nvcc_archs_readable} PARENT_SCOPE)
-endfunction()
-
-################################################################################################
-###  Non macro section
-################################################################################################
-
 # Special care for windows platform: we know that 32-bit windows does not
 # support cuda.
 if(${CMAKE_SYSTEM_NAME} STREQUAL "Windows")
@@ -347,87 +372,144 @@ if(${CMAKE_SYSTEM_NAME} STREQUAL "Windows")
   endif()
 endif()
 
-if (${CUDA_VERSION} LESS 8.0) # CUDA 7.x
-  set(Caffe2_known_gpu_archs ${Caffe2_known_gpu_archs7})
-  list(APPEND CUDA_NVCC_FLAGS "-D_MWAITXINTRIN_H_INCLUDED")
-  list(APPEND CUDA_NVCC_FLAGS "-D__STRICT_ANSI__")
-elseif (${CUDA_VERSION} LESS 9.0) # CUDA 8.x
-  set(Caffe2_known_gpu_archs ${Caffe2_known_gpu_archs8})
-  list(APPEND CUDA_NVCC_FLAGS "-D_MWAITXINTRIN_H_INCLUDED")
-  list(APPEND CUDA_NVCC_FLAGS "-D__STRICT_ANSI__")
-  # CUDA 8 may complain that sm_20 is no longer supported. Suppress the
-  # warning for now.
-  list(APPEND CUDA_NVCC_FLAGS "-Wno-deprecated-gpu-targets")
-endif()
-
 # Add onnx namepsace definition to nvcc
-if (ONNX_NAMESPACE)
+if(ONNX_NAMESPACE)
   list(APPEND CUDA_NVCC_FLAGS "-DONNX_NAMESPACE=${ONNX_NAMESPACE}")
 else()
   list(APPEND CUDA_NVCC_FLAGS "-DONNX_NAMESPACE=onnx_c2")
 endif()
 
-# CUDA 9.x requires GCC version <= 6
-if ((CUDA_VERSION VERSION_EQUAL   9.0) OR
-    (CUDA_VERSION VERSION_GREATER 9.0  AND CUDA_VERSION VERSION_LESS 10.0))
-  if (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND
-      NOT CMAKE_C_COMPILER_VERSION VERSION_LESS 7.0 AND
-      CUDA_HOST_COMPILER STREQUAL CMAKE_C_COMPILER)
-    message(FATAL_ERROR
-      "CUDA ${CUDA_VERSION} is not compatible with GCC version >= 7. "
-      "Use the following option to use another version (for example): \n"
-      "  -DCUDA_HOST_COMPILER=/usr/bin/gcc-6\n")
-  endif()
-elseif (CUDA_VERSION VERSION_EQUAL 8.0)
-  # CUDA 8.0 requires GCC version <= 5
-  if (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND
+# CUDA 9.0 & 9.1 require GCC version <= 5
+# Although they support GCC 6, but a bug that wasn't fixed until 9.2 prevents
+# them from compiling the std::tuple header of GCC 6.
+# See Sec. 2.2.1 of
+# https://developer.download.nvidia.com/compute/cuda/9.2/Prod/docs/sidebar/CUDA_Toolkit_Release_Notes.pdf
+if((CUDA_VERSION VERSION_EQUAL   9.0) OR
+    (CUDA_VERSION VERSION_GREATER 9.0  AND CUDA_VERSION VERSION_LESS 9.2))
+  if(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND
       NOT CMAKE_C_COMPILER_VERSION VERSION_LESS 6.0 AND
       CUDA_HOST_COMPILER STREQUAL CMAKE_C_COMPILER)
     message(FATAL_ERROR
-      "CUDA 8.0 is not compatible with GCC version >= 6. "
-      "Use the following option to use another version (for example): \n"
-      "  -DCUDA_HOST_COMPILER=/usr/bin/gcc-5\n")
+      "CUDA ${CUDA_VERSION} is not compatible with std::tuple from GCC version "
+      ">= 6. Please upgrade to CUDA 9.2 or set the following environment "
+      "variable to use another version (for example): \n"
+      "  export CUDAHOSTCXX='/usr/bin/gcc-5'\n")
+  endif()
+endif()
+
+# CUDA 9.0 / 9.1 require MSVC version < 19.12
+# CUDA 9.2 require MSVC version < 19.13
+# CUDA 10.0 require MSVC version < 19.20
+if((CUDA_VERSION VERSION_EQUAL   9.0) OR
+    (CUDA_VERSION VERSION_GREATER 9.0  AND CUDA_VERSION VERSION_LESS 9.2))
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC" AND
+      NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS 19.12 AND
+      NOT DEFINED ENV{CUDAHOSTCXX})
+        message(FATAL_ERROR
+          "CUDA ${CUDA_VERSION} is not compatible with MSVC toolchain version "
+          ">= 19.12. (a.k.a Visual Studio 2017 Update 5, VS 15.5) "
+          "Please upgrade to CUDA >= 9.2 or set the following environment "
+          "variable to use another version (for example): \n"
+          "  set \"CUDAHOSTCXX=C:\\Program Files (x86)\\Microsoft Visual Studio"
+          "\\2017\\Enterprise\\VC\\Tools\\MSVC\\14.11.25503\\bin\\HostX64\\x64\\cl.exe\"\n")
+  endif()
+elseif(CUDA_VERSION VERSION_EQUAL   9.2)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC" AND
+      NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS 19.14 AND
+      NOT DEFINED ENV{CUDAHOSTCXX})
+    message(FATAL_ERROR
+      "CUDA ${CUDA_VERSION} is not compatible with MSVC toolchain version "
+      ">= 19.14. (a.k.a Visual Studio 2017 Update 7, VS 15.7) "
+      "Please upgrade to CUDA >= 10.0 or set the following environment "
+      "variable to use another version (for example): \n"
+      "  set \"CUDAHOSTCXX=C:\\Program Files (x86)\\Microsoft Visual Studio"
+      "\\2017\\Enterprise\\VC\\Tools\\MSVC\\14.13.26132\\bin\\HostX64\\x64\\cl.exe\"\n")
+  endif()
+elseif(CUDA_VERSION VERSION_EQUAL   10.0)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC" AND
+      NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS 19.20 AND
+      NOT DEFINED ENV{CUDAHOSTCXX})
+    message(FATAL_ERROR
+      "CUDA ${CUDA_VERSION} is not compatible with MSVC toolchain version "
+      ">= 19.20. (a.k.a Visual Studio 2019, VS 16.0) "
+      "Please upgrade to CUDA >= 10.1 or set the following environment "
+      "variable to use another version (for example): \n"
+      "  set \"CUDAHOSTCXX=C:\\Program Files (x86)\\Microsoft Visual Studio"
+      "\\2017\\Enterprise\\VC\\Tools\\MSVC\\14.16.27023\\bin\\HostX64\\x64\\cl.exe\"\n")
+  endif()
+endif()
+
+# Don't activate VC env again for Ninja generators with MSVC on Windows if CUDAHOSTCXX is not defined
+# by adding --use-local-env.
+if(MSVC AND CMAKE_GENERATOR STREQUAL "Ninja" AND NOT DEFINED ENV{CUDAHOSTCXX})
+  list(APPEND CUDA_NVCC_FLAGS "--use-local-env")
+  # For CUDA < 9.2, --cl-version xxx is also required.
+  # We could detect cl version according to the following variable
+  # https://cmake.org/cmake/help/latest/variable/MSVC_TOOLSET_VERSION.html#variable:MSVC_TOOLSET_VERSION.
+  # 140       = VS 2015 (14.0)
+  # 141       = VS 2017 (15.0)
+  if(CUDA_VERSION VERSION_LESS 9.2)
+    if(MSVC_TOOLSET_VERSION EQUAL 140)
+      list(APPEND CUDA_NVCC_FLAGS "--cl-version" "2015")
+    elseif(MSVC_TOOLSET_VERSION EQUAL 141)
+      list(APPEND CUDA_NVCC_FLAGS "--cl-version" "2017")
+    else()
+      message(STATUS "We could not auto-detect the cl-version for MSVC_TOOLSET_VERSION=${MSVC_TOOLSET_VERSION}")
+    endif()
   endif()
 endif()
 
 # setting nvcc arch flags
-caffe2_select_nvcc_arch_flags(NVCC_FLAGS_EXTRA)
+torch_cuda_get_nvcc_gencode_flag(NVCC_FLAGS_EXTRA)
 list(APPEND CUDA_NVCC_FLAGS ${NVCC_FLAGS_EXTRA})
-message(STATUS "Added CUDA NVCC flags for: ${NVCC_FLAGS_EXTRA_readable}")
+message(STATUS "Added CUDA NVCC flags for: ${NVCC_FLAGS_EXTRA}")
 
-# disable some nvcc diagnostic that apears in boost, glog, glags, opencv, etc.
-foreach(diag cc_clobber_ignored integer_sign_change useless_using_declaration set_but_not_used)
+# disable some nvcc diagnostic that appears in boost, glog, glags, opencv, etc.
+foreach(diag cc_clobber_ignored integer_sign_change useless_using_declaration
+             set_but_not_used field_without_dll_interface
+             base_class_has_different_dll_interface
+             dll_interface_conflict_none_assumed
+             dll_interface_conflict_dllexport_assumed
+             implicit_return_from_non_void_function
+             unsigned_compare_with_zero
+             declared_but_not_referenced
+             bad_friend_decl)
   list(APPEND CUDA_NVCC_FLAGS -Xcudafe --diag_suppress=${diag})
 endforeach()
 
-# Set C++11 support
-set(CUDA_PROPAGATE_HOST_FLAGS OFF)
-if (NOT MSVC)
-  list(APPEND CUDA_NVCC_FLAGS "-std=c++11")
-  list(APPEND CUDA_NVCC_FLAGS "-Xcompiler -fPIC")
+# Set C++14 support
+set(CUDA_PROPAGATE_HOST_FLAGS_BLACKLIST "-Werror")
+if(MSVC)
+  list(APPEND CUDA_NVCC_FLAGS "--Werror" "cross-execution-space-call")
+  list(APPEND CUDA_NVCC_FLAGS "--no-host-device-move-forward")
+else()
+  list(APPEND CUDA_NVCC_FLAGS "-std=c++14")
+  list(APPEND CUDA_NVCC_FLAGS "-Xcompiler" "-fPIC")
+endif()
+
+# OpenMP flags for NVCC with Clang-cl
+if("${CMAKE_CXX_SIMULATE_ID}" STREQUAL "MSVC"
+  AND "${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
+  list(APPEND CUDA_PROPAGATE_HOST_FLAGS_BLACKLIST "-Xclang" "-fopenmp")
+  if(MSVC_TOOLSET_VERSION LESS 142)
+    list(APPEND CUDA_NVCC_FLAGS "-Xcompiler" "-openmp")
+  else()
+    list(APPEND CUDA_NVCC_FLAGS "-Xcompiler" "-openmp:experimental")
+  endif()
 endif()
 
 # Debug and Release symbol support
-if (MSVC)
-  if (${CMAKE_BUILD_TYPE} MATCHES "Release")
-    if (${BUILD_SHARED_LIBS})
-      list(APPEND CUDA_NVCC_FLAGS "-Xcompiler" "-MD")
-    else()
-      list(APPEND CUDA_NVCC_FLAGS "-Xcompiler" "-MT")
-    endif()
-  elseif(${CMAKE_BUILD_TYPE} MATCHES "Debug")
-    message(FATAL_ERROR
-            "Caffe2 currently does not support the combination of MSVC, Cuda "
-            "and Debug mode. Either set USE_CUDA=OFF or set the build type "
-            "to Release")
-    if (${BUILD_SHARED_LIBS})
-      list(APPEND CUDA_NVCC_FLAGS "-Xcompiler" "-MDd")
-    else()
-      list(APPEND CUDA_NVCC_FLAGS "-Xcompiler" "-MTd")
-    endif()
+if(MSVC)
+  if(${CAFFE2_USE_MSVC_STATIC_RUNTIME})
+    list(APPEND CUDA_NVCC_FLAGS "-Xcompiler" "-MT$<$<CONFIG:Debug>:d>")
   else()
-    message(FATAL_ERROR "Unknown cmake build type: " ${CMAKE_BUILD_TYPE})
+    list(APPEND CUDA_NVCC_FLAGS "-Xcompiler" "-MD$<$<CONFIG:Debug>:d>")
   endif()
+  if(CUDA_NVCC_FLAGS MATCHES "Zi")
+    list(APPEND CUDA_NVCC_FLAGS "-Xcompiler" "-FS")
+  endif()
+elseif(CUDA_DEVICE_DEBUG)
+  list(APPEND CUDA_NVCC_FLAGS "-g" "-G")  # -G enables device code debugging symbols
 endif()
 
 # Set expt-relaxed-constexpr to suppress Eigen warnings

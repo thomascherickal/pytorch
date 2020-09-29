@@ -1,9 +1,9 @@
 ## @package model_helper_api
 # Module caffe2.python.model_helper_api
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
+
+
+
+
 
 import sys
 import copy
@@ -45,6 +45,7 @@ class HelperWrapper(object):
         'instance_norm': instance_norm,
         'spatial_bn': spatial_bn,
         'spatial_gn': spatial_gn,
+        'moments_with_running_stats': moments_with_running_stats,
         'relu': relu,
         'prelu': prelu,
         'tanh': tanh,

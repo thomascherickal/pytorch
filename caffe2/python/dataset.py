@@ -10,10 +10,10 @@ Iterating through entries of this dataset is very fast since the dataset
 is stored as a set of native Caffe2 tensors, thus no type conversion or
 deserialization is necessary.
 """
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
+
+
+
+
 
 from caffe2.python import core, workspace
 from caffe2.python.dataio import Reader, Writer
@@ -48,8 +48,7 @@ class _DatasetReader(Reader):
                 content.field_names(),
                 batch_size=self.batch_size,
                 enforce_batch_size=self.enforce_batch_size)
-            if type(fields) is core.BlobReference:
-                fields = [fields]
+            fields = core.output_to_list(fields)
             return (read_net.IsEmpty([fields[0]]), fields)
 
     def reset(self, net):
@@ -73,7 +72,7 @@ class _DatasetRandomReader(Reader):
         if self.cursor is None:
             self.cursor = init_net.CreateTreeCursor(
                 [],
-                [self.name],
+                init_net.NextScopedBlob(self.name),
                 fields=self.dataset.fields)
 
     def reset(self, net):
@@ -106,14 +105,19 @@ class _DatasetRandomReader(Reader):
         self.indices = indices
 
     def read(self, read_net):
+        assert self.cursor, 'setup_ex not called'
+        assert self.indices, 'sort_and_shuffle not called'
+        assert self.offsets, 'computeoffset not called'
+        content = self.dataset.content()
         with core.NameScope(read_net.NextName(self.name)):
             fields = read_net.ReadRandomBatch(
                 [self.cursor, self.indices, self.offsets] + (
-                    self.dataset.content().field_blobs()),
-                self.dataset.content().field_names(),
+                    content.field_blobs()),
+                content.field_names(),
                 batch_size=self.batch_size,
                 enforce_batch_size=self.enforce_batch_size,
                 loop_over=self.loop_over)
+            fields = core.output_to_list(fields)
             return (read_net.IsEmpty([fields[0]]), fields)
 
 

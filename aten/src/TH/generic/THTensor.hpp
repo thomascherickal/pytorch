@@ -1,21 +1,16 @@
 #ifndef TH_GENERIC_FILE
-#define TH_GENERIC_FILE "generic/THTensor.hpp"
+#define TH_GENERIC_FILE "TH/generic/THTensor.hpp"
 #else
 
-typedef struct THTensor
-{
-    int64_t *size;
-    int64_t *stride;
-    int nDimension;
+// STOP!!! Thinking of including this header directly?  Please
+// read Note [TH abstraction violation]
 
-    // Note: storage->size may be greater than the recorded size
-    // of a tensor
-    THStorage *storage;
-    ptrdiff_t storageOffset;
-    std::atomic<int> refcount;
+// NOTE: functions exist here only to support dispatch via Declarations.cwrap.  You probably don't want to put
+// new functions in here, they should probably be un-genericized.
 
-    char flag;
+TH_CPP_API void THTensor_(setStorage)(THTensor *self, THStorage *storage_, ptrdiff_t storageOffset_,
+                                      at::IntArrayRef size_, at::IntArrayRef stride_);
 
-} THTensor;
+TH_CPP_API void THTensor_(resize)(THTensor *self, at::IntArrayRef size, at::IntArrayRef stride);
 
 #endif

@@ -1,9 +1,9 @@
 # @package regularizer_context
 # Module caffe2.python.regularizer_context
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
+
+
+
+
 
 from caffe2.python import context
 from caffe2.python.modifier_context import (
@@ -28,9 +28,9 @@ class RegularizerContext(ModifierContext):
 class UseRegularizer(UseModifierBase):
     '''
     context class to allow setting the current context.
-    Example useage with layer:
+    Example usage with layer:
         regularizers = {'reg1': reg1, 'reg2': reg2}
-        with Regularizers(regularizers):
+        with UseRegularizer(regularizers):
             reg = RegularizerContext.current().get_regularizer('reg1')
             layer(reg=reg)
     '''

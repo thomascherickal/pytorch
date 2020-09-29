@@ -1,7 +1,12 @@
+#include <limits>
+#include <vector>
+#include <functional>
 #include <ATen/ATen.h>
 #include <ATen/NativeFunctions.h>
 #include <ATen/Config.h>
 #include <ATen/cuda/CUDAConfig.h>
+#include <ATen/cuda/Exceptions.h>
+#include <ATen/native/ConvUtils.h>
 
 #if !AT_CUDNN_ENABLED()
 
@@ -10,76 +15,72 @@ namespace at { namespace native {
 // See Note [ATen preprocessor philosophy]
 
 at::Tensor cudnn_convolution(
-    const at::Tensor& input, const at::Tensor& weight, const at::Tensor& bias /* optional */,
-    IntList padding, IntList stride, IntList dilation,
-    int64_t groups, bool benchmark, bool deterministic) {
-  throw std::runtime_error("cudnn_convolution: ATen not compiled with cuDNN support");
+    const at::Tensor& input, const at::Tensor& weight,
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation,
+    int64_t groups, bool benchmark, bool deterministic, bool allow_tf32) {
+  AT_ERROR("cudnn_convolution: ATen not compiled with cuDNN support");
 }
 
 at::Tensor cudnn_convolution_backward_input(
-    IntList input_size, const at::Tensor& grad_output, const at::Tensor& weight,
-    IntList padding, IntList stride, IntList dilation, int64_t groups,
-    bool benchmark, bool deterministic) {
-  throw std::runtime_error("cudnn_convolution_backward_input: ATen not compiled with cuDNN support");
+    IntArrayRef input_size, const at::Tensor& grad_output, const at::Tensor& weight,
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
+    bool benchmark, bool deterministic, bool allow_tf32) {
+  AT_ERROR("cudnn_convolution_backward_input: ATen not compiled with cuDNN support");
 }
 
 at::Tensor cudnn_convolution_backward_weight(
-    IntList weight_size, const at::Tensor& grad_output, const at::Tensor& input,
-    IntList padding, IntList stride, IntList dilation, int64_t groups,
-    bool benchmark, bool deterministic) {
-  throw std::runtime_error("cudnn_convolution_backward_weight: ATen not compiled with cuDNN support");
+    IntArrayRef weight_size, const at::Tensor& grad_output, const at::Tensor& input,
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
+    bool benchmark, bool deterministic, bool allow_tf32) {
+  AT_ERROR("cudnn_convolution_backward_weight: ATen not compiled with cuDNN support");
 }
 
-at::Tensor cudnn_convolution_backward_bias(
-    const at::Tensor& grad_output) {
-  throw std::runtime_error("cudnn_convolution_backward_bias: ATen not compiled with cuDNN support");
-}
-
-std::tuple<at::Tensor,at::Tensor,at::Tensor> cudnn_convolution_backward(
+std::tuple<at::Tensor,at::Tensor> cudnn_convolution_backward(
     const at::Tensor& input, const at::Tensor& grad_output, const at::Tensor& weight,
-    IntList padding, IntList stride, IntList dilation, int64_t groups,
-    bool benchmark, bool deterministic, std::array<bool,3> output_mask) {
-  throw std::runtime_error("cudnn_convolution_backward: ATen not compiled with cuDNN support");
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
+    bool benchmark, bool deterministic, bool allow_tf32, std::array<bool,2> output_mask) {
+  AT_ERROR("cudnn_convolution_backward: ATen not compiled with cuDNN support");
 }
 
 at::Tensor cudnn_convolution_transpose(
-    const at::Tensor& input, const at::Tensor& weight, const at::Tensor& bias /* optional */,
-    IntList padding, IntList output_padding, IntList stride, IntList dilation,
-    int64_t groups, bool benchmark, bool deterministic) {
-  throw std::runtime_error("cudnn_convolution_transpose: ATen not compiled with cuDNN support");
+    const at::Tensor& input, const at::Tensor& weight,
+    IntArrayRef padding, IntArrayRef output_padding, IntArrayRef stride, IntArrayRef dilation,
+    int64_t groups, bool benchmark, bool deterministic, bool allow_tf32) {
+  AT_ERROR("cudnn_convolution_transpose: ATen not compiled with cuDNN support");
 }
 
 at::Tensor cudnn_convolution_transpose_backward_input(
     const at::Tensor& grad_output, const at::Tensor& weight,
-    IntList padding, IntList stride, IntList dilation,
-    int64_t groups, bool benchmark, bool deterministic) {
-  throw std::runtime_error("cudnn_convolution_transpose_backward: ATen not compiled with cuDNN support");
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation,
+    int64_t groups, bool benchmark, bool deterministic, bool allow_tf32) {
+  AT_ERROR("cudnn_convolution_transpose_backward: ATen not compiled with cuDNN support");
 }
 
 at::Tensor cudnn_convolution_transpose_backward_weight(
-    IntList weight_size, const at::Tensor& grad_output, const at::Tensor& input,
-    IntList padding, IntList stride, IntList dilation, int64_t groups,
-    bool benchmark, bool deterministic) {
-  throw std::runtime_error("cudnn_convolution_transpose_backward_weight: ATen not compiled with cuDNN support");
+    IntArrayRef weight_size, const at::Tensor& grad_output, const at::Tensor& input,
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
+    bool benchmark, bool deterministic, bool allow_tf32) {
+  AT_ERROR("cudnn_convolution_transpose_backward_weight: ATen not compiled with cuDNN support");
 }
 
-std::tuple<at::Tensor,at::Tensor,at::Tensor> cudnn_convolution_transpose_backward(
+std::tuple<at::Tensor,at::Tensor> cudnn_convolution_transpose_backward(
     const at::Tensor& input, const at::Tensor& grad_output, const at::Tensor& weight,
-    IntList padding, IntList output_padding, IntList stride, IntList dilation, int64_t groups,
-    bool benchmark, bool deterministic, std::array<bool,3> output_mask) {
-  throw std::runtime_error("cudnn_convolution_transpose_backward: ATen not compiled with cuDNN support");
+    IntArrayRef padding, IntArrayRef output_padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
+    bool benchmark, bool deterministic, bool allow_tf32, std::array<bool,2> output_mask) {
+  AT_ERROR("cudnn_convolution_transpose_backward: ATen not compiled with cuDNN support");
 }
 
 }}
 
 #else  // AT_CUDNN_ENABLED
 
-#include "THC/THC.h"
+#include <THC/THC.h>
 
 #include <ATen/cudnn/cudnn-wrapper.h>
 #include <ATen/cudnn/Descriptors.h>
 #include <ATen/cudnn/Types.h>
 #include <ATen/cudnn/Utils.h>
+#include <ATen/native/utils/ParamsHash.h>
 
 #include <ATen/TensorUtils.h>
 
@@ -92,82 +93,37 @@ std::tuple<at::Tensor,at::Tensor,at::Tensor> cudnn_convolution_transpose_backwar
 #include <stdint.h>
 #include <unordered_map>
 
+// Note [behavior of cudnnFind and cudnnGet]
+// You'll notice that by default, in the ConvolutionDescriptor, we do the following:
+//
+//     AT_CUDNN_CHECK(cudnnSetConvolutionMathType(mut_desc(), CUDNN_DEFAULT_MATH));
+//     if(dataType == CUDNN_DATA_HALF)
+//       AT_CUDNN_CHECK(cudnnSetConvolutionMathType(mut_desc(), CUDNN_TENSOR_OP_MATH));
+//
+// When cudnnSetConvolutionMathType is called before cudnnGet/cudnnFind, it informs
+// cudnnGet/cudnnFind to iterate/take into account both tensor core and non-tensor-core algos.
+// If you don't call cudnnSetConvolutionMathType before calling cudnnGet/cudnnFind,
+// cudnnGet/cudnnFind may not pick tensor core algos.
+//
+// Now after its run, cudnnGet/cudnnFind comes up with the best pair of algo+mathType
+// with all the initial knowledge its given. It then becomes the user's responsibility
+// to update mathType of the convolution descriptor and call the subsequent cudnn calls with
+// the best algo and the updated descriptor. If we don't update the descriptor but just run
+// with the best algo, under the hood, cudnn will run with the slower kernel
+// since it sees fastest algorithm combination with a sub optimal mathType.
+
+// Note [blocklist fft algorithms for strided dgrad]
+// This is a workaround for a CuDNN bug that gave wrong results in certain strided convolution
+// gradient setups. Check Issue #16610 for bug details. Bug is there for CUDNN version < 7.5 .
+
+constexpr size_t operator "" _TiB(unsigned long long n) {
+  return size_t(n) * 1024 * 1024 * 1024 * 1024;
+}
+
 namespace at { namespace native {
 
 // TODO: Go through all the checking code again and make sure
 // we haven't missed anything.
-
-// ---------------------------------------------------------------------
-//
-// Math
-//
-// ---------------------------------------------------------------------
-
-constexpr int input_batch_size_dim = 0;  // also grad_input
-constexpr int input_channels_dim = 1;
-constexpr int output_batch_size_dim = 0;  // also grad_output
-constexpr int output_channels_dim = 1;
-constexpr int weight_output_channels_dim = 0;
-constexpr int weight_input_channels_dim = 1;
-
-// Often written as 2 + max_dim (extra dims for batch size and channels)
-constexpr int max_dim = 3;
-
-// NB: conv_output_size and conv_input_size are not bijections,
-// as conv_output_size loses information; this is why conv_input_size
-// takes an extra output_padding argument to resolve the ambiguity.
-
-std::vector<int64_t> conv_output_size(
-    IntList input_size, IntList weight_size,
-    IntList padding, IntList stride, IntList dilation, int64_t groups
-) {
-  // ASSERT(input_size.size() > 2)
-  // ASSERT(input_size.size() == weight_size.size())
-  auto dim = input_size.size();
-  std::vector<int64_t> output_size(dim);
-  output_size[0] = input_size[input_batch_size_dim];
-  output_size[1] = weight_size[weight_output_channels_dim];
-  for (size_t d = 2; d < dim; ++d) {
-    auto kernel = dilation[d - 2] * (weight_size[d] - 1) + 1;
-    output_size[d] = (input_size[d] + (2 * padding[d - 2])
-                        - kernel) / stride[d - 2] + 1;
-  }
-  return output_size;
-}
-
-std::vector<int64_t> conv_input_size(
-    IntList output_size, IntList weight_size,
-    IntList padding, IntList output_padding, IntList stride, IntList dilation, int64_t groups
-) {
-  // ASSERT(output_size.size() > 2)
-  // ASSERT(output_size.size() == weight_size.size())
-  auto dim = output_size.size();
-  std::vector<int64_t> input_size(dim);
-  input_size[0] = output_size[output_batch_size_dim];
-  input_size[1] = weight_size[weight_input_channels_dim] * groups;
-  for (size_t d = 2; d < dim; ++d) {
-    int kernel = dilation[d - 2] * (weight_size[d] - 1) + 1;
-    input_size[d] = (output_size[d] - 1) * stride[d - 2] - (2 * padding[d - 2]) +
-                     kernel + output_padding[d - 2];
-  }
-  return input_size;
-}
-
-std::vector<int64_t> conv_weight_size(
-    IntList input_size, IntList output_size,
-    IntList padding, IntList output_padding, IntList stride, IntList dilation, int64_t groups
-) {
-  auto dim = input_size.size();
-  std::vector<int64_t> weight_size(dim);
-  weight_size[0] = output_size[1];
-  weight_size[1] = input_size[1] / groups;
-  for (size_t d = 2; d < dim; ++d) {
-    int kernel = input_size[d] - (output_size[d] - 1) * stride[d - 2]
-               + 2 * padding[d - 2] - output_padding[d - 2];
-    weight_size[d] = (kernel - 1) / dilation[d - 2] + 1;
-  }
-  return weight_size;
-}
 
 // TODO: Move this into the standard library, with a better name?
 Tensor narrowGroup(const Tensor& t, int dim, int group_idx, int64_t groups) {
@@ -190,18 +146,14 @@ Tensor narrowGroup(const Tensor& t, int dim, int group_idx, int64_t groups) {
 // has a fairly good diagram explaining how it works.
 
 // Used on pad, stride and dilation
-static void check_args(CheckedFrom c, IntList args, size_t expected_size, const char* arg_name)
+static void check_args(CheckedFrom c, IntArrayRef args, size_t expected_size, const char* arg_name)
 {
-  if (args.size() > expected_size){
-    std::stringstream ss;
-    ss << "Too many " << arg_name << " values (" << args.size() << ") supplied, expecting " << expected_size << " (while checking arguments for " << c << ")";
-    throw std::runtime_error(ss.str());
-  }
-  else if (args.size() < expected_size){
-    std::stringstream ss;
-    ss << "Not enough " << arg_name << " values (" << args.size() << ") supplied, expecting " << expected_size << " (while checking arguments for " << c << ")";
-    throw std::runtime_error(ss.str());
-  }
+  TORCH_CHECK(args.size() <= expected_size,
+           "Too many ", arg_name, " values (", args.size(), ") supplied, expecting ",
+           expected_size, " (while checking arguments for ", c, ")");
+  TORCH_CHECK(args.size() >= expected_size,
+           "Not enough ", arg_name, " values (", args.size(), ") supplied, expecting ",
+           expected_size, " (while checking arguments for ", c, ")");
 
   auto num_negative_values = std::count_if(args.begin(), args.end(), [](int x){return x < 0;});
   if (num_negative_values > 0){
@@ -209,11 +161,13 @@ static void check_args(CheckedFrom c, IntList args, size_t expected_size, const 
     ss << arg_name << " should be greater than zero but got (";
     std::copy(args.begin(), args.end() - 1, std::ostream_iterator<int>(ss,", "));
     ss << args.back() <<  ")" << " (while checking arguments for " << c << ")";
-    throw std::runtime_error(ss.str());
+    AT_ERROR(ss.str());
   }
 }
 
 
+// NOTE [ Convolution checks ]
+//
 // NB: For many call sites, it is not strictly necessary to check all of
 // these relationships (for example, for forward convolution, we compute
 // the size of output ourselves, so we don't actually need to check
@@ -230,7 +184,7 @@ static void check_args(CheckedFrom c, IntList args, size_t expected_size, const 
 static void convolution_shape_check(
     CheckedFrom c,
     const TensorGeometryArg& input, const TensorGeometryArg& weight, const TensorGeometryArg& output,
-    IntList padding, IntList stride, IntList dilation, int64_t groups)
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups)
 {
   check_args(c, padding, input->dim() - 2, "padding");
   check_args(c, stride, padding.size(), "stride");
@@ -261,12 +215,10 @@ struct ConvolutionParams
   int dilation[max_dim];
   int64_t groups;
   bool deterministic;
+  bool allow_tf32;
   // NB: transposed purposely omitted: transposed just swaps
   // forward and backward, so you can reuse the benchmark entry,
 };
-// ConvolutionParams must be a POD because we read out its memory
-// contenst as char* when hashing
-static_assert(std::is_pod<ConvolutionParams>::value, "ConvolutionParams not POD");
 
 // NB: This can't be a constructor, because then ConvolutionParams
 // would not be a POD anymore.
@@ -276,8 +228,8 @@ static_assert(std::is_pod<ConvolutionParams>::value, "ConvolutionParams not POD"
 void setConvolutionParams(
     ConvolutionParams* params,
     const at::Tensor& input, const at::Tensor& weight,
-    IntList padding, IntList stride, IntList dilation,
-    int64_t groups, bool deterministic) {
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation,
+    int64_t groups, bool deterministic, bool allow_tf32) {
 
   cudnnDataType_t dataType = getCudnnDataType(input);
   memset(params, 0, sizeof(ConvolutionParams));
@@ -299,6 +251,7 @@ void setConvolutionParams(
   // CuDNN, but it doesn't seem worth the effort to actually do this.
   params->groups = groups;
   params->deterministic = deterministic;
+  params->allow_tf32 = allow_tf32;
 }
 
 // Convenience struct for passing around descriptors and data
@@ -321,32 +274,11 @@ struct ConvolutionArgs {
 //
 // ---------------------------------------------------------------------
 
-// Hashing machinery for ConvolutionParams
-struct ParamsHash {
-  std::size_t operator()(const ConvolutionParams& params) const {
-    auto ptr = reinterpret_cast<const uint8_t*>(&params);
-    uint32_t value = 0x811C9DC5;
-    for (int i = 0; i < (int)sizeof(ConvolutionParams); ++i) {
-      value ^= ptr[i];
-      value *= 0x01000193;
-    }
-    return (size_t)value;
-  }
-};
-
-struct ParamsEqual {
-  bool operator()(const ConvolutionParams& a, const ConvolutionParams& b) const {
-    auto ptr1 = reinterpret_cast<const uint8_t*>(&a);
-    auto ptr2 = reinterpret_cast<const uint8_t*>(&b);
-    return memcmp(ptr1, ptr2, sizeof(ConvolutionParams)) == 0;
-  }
-};
-
 // TODO: Use something less heavy duty than a big honking mutex
 template <typename T>
 struct BenchmarkCache {
   std::mutex mutex;
-  std::unordered_map<ConvolutionParams, T, ParamsHash, ParamsEqual> map;
+  std::unordered_map<ConvolutionParams, T, ParamsHash<ConvolutionParams>, ParamsEqual<ConvolutionParams>> map;
 
   bool find(const ConvolutionParams& params, T* results) {
     std::lock_guard<std::mutex> guard(mutex);
@@ -364,15 +296,19 @@ struct BenchmarkCache {
   }
 };
 
-BenchmarkCache<cudnnConvolutionFwdAlgo_t> fwd_algos;
-BenchmarkCache<cudnnConvolutionBwdDataAlgo_t> bwd_data_algos;
-BenchmarkCache<cudnnConvolutionBwdFilterAlgo_t> bwd_filter_algos;
+BenchmarkCache<cudnnConvolutionFwdAlgoPerf_t> fwd_algos;
+BenchmarkCache<cudnnConvolutionBwdDataAlgoPerf_t> bwd_data_algos;
+BenchmarkCache<cudnnConvolutionBwdFilterAlgoPerf_t> bwd_filter_algos;
 
 // TODO: Stop manually allocating CUDA memory; allocate an ATen byte
 // tensor instead.
 struct Workspace {
   Workspace(size_t size) : size(size), data(NULL) {
-    CUDA_CHECK(THCudaMalloc(globalContext().lazyInitCUDA(), &data, size));
+    // Sometimes cuDNN returns a workspace size > 2^63, this could makes the allocation of
+    // workspace fail with some 64bit indexing error instead of an OOM error. In such case,
+    // we manually fail with OOM.
+    TORCH_CHECK_WITH(CUDAOutOfMemoryError, size < 1_TiB, "Not enough memory for workspace!");
+    data = THCudaMalloc(globalContext().lazyInitCUDA(), size);
   }
   Workspace(const Workspace&) = delete;
   Workspace(Workspace&&) = default;
@@ -387,7 +323,7 @@ struct Workspace {
   void* data;
 };
 
-template<typename algo_t>
+template<typename perf_t>
 struct algorithm_search {
 };
 
@@ -437,53 +373,74 @@ size_t getMaxWorkspaceSize(
     const ConvolutionArgs& args,
     const algo_t *algo, int n_algo)
 {
-    THCState *state = globalContext().lazyInitCUDA();
+  size_t max_ws_size = 0;
+  size_t max_block_size = 0;
+  size_t tmp_bytes = 0;  // Only used for filling pointer parameters that aren't used later
 
-    size_t max_ws_size = 0;
-    size_t max_block_size = 0;
-    size_t total_gpu_mem = 0;
-    size_t free_gpu_mem = 0;
+  int device;
+  THCudaCheck(cudaGetDevice(&device));
+  c10::cuda::CUDACachingAllocator::cacheInfo(device, &tmp_bytes, &max_block_size);
 
-    THCudaCheck(THCudaMemGetInfoCached(state, &free_gpu_mem, &total_gpu_mem, &max_block_size));
-
-    for (int i = 0; i < n_algo; i++) {
-        cudnnStatus_t err;
-        size_t sz;
-        err = getWorkspaceSize(args, algo[i], &sz);
-        if (CUDNN_STATUS_SUCCESS != err || sz == 0
-            || sz < max_ws_size || sz > max_block_size) continue;
-        max_ws_size = sz;
-    }
-    return max_ws_size;
+  for (int i = 0; i < n_algo; i++) {
+    cudnnStatus_t err;
+    size_t sz;
+    err = getWorkspaceSize(args, algo[i], &sz);
+    if (CUDNN_STATUS_SUCCESS != err || sz == 0 || sz < max_ws_size || sz > max_block_size)
+      continue;
+    max_ws_size = sz;
+  }
+  return max_ws_size;
 }
 
 template<typename perf_t>
-perf_t getBestAlgorithm(perf_t *perfResults, bool deterministic, int n_algo) {
-  if (deterministic) {
-    // iterate over perf results of all algorithms and find the best deterministic algo
-    for (int i = 0; i < n_algo; i++) {
-      // TODO: Shouldn't all returned results be successful?
-      // Double check documentation for cudnnFindConvolutionForwardAlgorithmEx
-      if (perfResults[i].status == CUDNN_STATUS_SUCCESS &&
-          perfResults[i].determinism == CUDNN_DETERMINISTIC) {
-        return perfResults[i];
+std::vector<perf_t> getValidAlgorithms(perf_t *perfResults, const ConvolutionArgs& args, int n_algo) {
+
+// See Note [blocklist fft algorithms for strided dgrad]
+#if CUDNN_VERSION < 7500
+  bool blocklist = std::is_same<decltype(perfResults[0].algo), cudnnConvolutionBwdDataAlgo_t>::value;
+  int stride_dim = args.input.dim() - 2;
+  blocklist &= std::any_of(std::begin(args.params.stride),
+                            std::begin(args.params.stride) + stride_dim,
+                            [=](int n){return n != 1;});
+#endif
+
+  std::vector<perf_t> result;
+  result.reserve(n_algo);
+  for (int i = 0; i < n_algo; i++) {
+    perf_t perf = perfResults[i];
+
+    // TODO: Shouldn't all returned results be successful?
+    // Double check documentation for cudnnFindConvolutionForwardAlgorithmEx
+    if (perf.status == CUDNN_STATUS_SUCCESS) {
+      if (!args.params.deterministic || perf.determinism == CUDNN_DETERMINISTIC) {
+
+        // See Note [blocklist fft algorithms for strided dgrad]
+#if CUDNN_VERSION < 7500
+        bool skip = blocklist;
+        skip &= (static_cast<cudnnConvolutionBwdDataAlgo_t>(perfResults[i].algo) == CUDNN_CONVOLUTION_BWD_DATA_ALGO_FFT_TILING ||
+                  static_cast<cudnnConvolutionBwdDataAlgo_t>(perfResults[i].algo) == CUDNN_CONVOLUTION_BWD_DATA_ALGO_FFT);
+        if (skip) {
+          continue;
+        }
+#endif
+
+        result.push_back(perf);
       }
     }
-    throw std::runtime_error("no deterministic convolution algorithms available in CuDNN");
-  } else {
-    return perfResults[0];
   }
+  TORCH_CHECK(result.size() > 0, "no valid convolution algorithms available in CuDNN");
+  return result;
 }
 
 template<>
-struct algorithm_search<cudnnConvolutionFwdAlgo_t> {
+struct algorithm_search<cudnnConvolutionFwdAlgoPerf_t> {
   using perf_t = cudnnConvolutionFwdAlgoPerf_t;
   using algo_t = cudnnConvolutionFwdAlgo_t;
 
   static constexpr auto DEFAULT_ALGO = CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM;
-  static BenchmarkCache<algo_t>& cache() { return fwd_algos; }
+  static BenchmarkCache<perf_t>& cache() { return fwd_algos; }
 
-  static perf_t findAlgorithm(const ConvolutionArgs& args) {
+  static std::vector<perf_t> findAlgorithms(const ConvolutionArgs& args, bool benchmark) {
     static const algo_t algos[] = {
          CUDNN_CONVOLUTION_FWD_ALGO_GEMM,
          CUDNN_CONVOLUTION_FWD_ALGO_FFT,
@@ -499,43 +456,44 @@ struct algorithm_search<cudnnConvolutionFwdAlgo_t> {
                   "Missing cuDNN convolution forward algorithms");
     int perf_count;
     std::unique_ptr<perf_t[]> perf_results(new perf_t[num_algos]);
-    size_t max_ws_size = getMaxWorkspaceSize(args, algos, num_algos);
-    Workspace ws(max_ws_size);
-    CUDNN_CHECK(cudnnFindConvolutionForwardAlgorithmEx(
-        args.handle,
-        args.idesc.desc(), args.input.data_ptr(),
-        args.wdesc.desc(), args.weight.data_ptr(),
-        args.cdesc.desc(),
-        args.odesc.desc(), args.output.data_ptr(),
-        num_algos,
-        &perf_count,
-        perf_results.get(),
-        ws.data,
-        ws.size));
-    return getBestAlgorithm(perf_results.get(), args.params.deterministic, perf_count);
-  }
+    if (!benchmark) {
+      AT_CUDNN_CHECK(cudnnGetConvolutionForwardAlgorithm_v7(
+          args.handle,
+          args.idesc.desc(),
+          args.wdesc.desc(),
+          args.cdesc.desc(),
+          args.odesc.desc(),
+          num_algos,
+          &perf_count,
+          perf_results.get()));
+    } else {
+      size_t max_ws_size = getMaxWorkspaceSize(args, algos, num_algos);
+      Workspace ws(max_ws_size);
+      AT_CUDNN_CHECK(cudnnFindConvolutionForwardAlgorithmEx(
+          args.handle,
+          args.idesc.desc(), args.input.data_ptr(),
+          args.wdesc.desc(), args.weight.data_ptr(),
+          args.cdesc.desc(),
+          args.odesc.desc(), args.output.data_ptr(),
+          num_algos,
+          &perf_count,
+          perf_results.get(),
+          ws.data,
+          ws.size));
 
-  static void getAlgorithm(
-    const ConvolutionArgs& args,
-    algo_t* algo)
-  {
-    cudnnConvolutionFwdPreference_t pref = CUDNN_CONVOLUTION_FWD_PREFER_FASTEST;
-    CUDNN_CHECK(cudnnGetConvolutionForwardAlgorithm(
-        args.handle,
-        args.idesc.desc(),
-        args.wdesc.desc(),
-        args.cdesc.desc(),
-        args.odesc.desc(),
-        pref,
-        0,
-        algo));
+      // Free the cached blocks in our caching allocator. They are
+      // needed here because the above benchmarking uses a huge amount of memory,
+      // e.g. a few GBs.
+      c10::cuda::CUDACachingAllocator::emptyCache();
+    }
+    return getValidAlgorithms<perf_t>(perf_results.get(), args, perf_count);
   }
 
   static void getWorkspaceSize(
     const ConvolutionArgs& args,
     algo_t algo, size_t* workspaceSize)
   {
-    CUDNN_CHECK(cudnnGetConvolutionForwardWorkspaceSize(
+    AT_CUDNN_CHECK(cudnnGetConvolutionForwardWorkspaceSize(
         args.handle,
         args.idesc.desc(),
         args.wdesc.desc(),
@@ -547,14 +505,14 @@ struct algorithm_search<cudnnConvolutionFwdAlgo_t> {
 };
 
 template<>
-struct algorithm_search<cudnnConvolutionBwdDataAlgo_t> {
+struct algorithm_search<cudnnConvolutionBwdDataAlgoPerf_t> {
   using perf_t = cudnnConvolutionBwdDataAlgoPerf_t;
   using algo_t = cudnnConvolutionBwdDataAlgo_t;
 
   static constexpr auto DEFAULT_ALGO = CUDNN_CONVOLUTION_BWD_DATA_ALGO_1;
-  static BenchmarkCache<algo_t>& cache() { return bwd_data_algos; }
+  static BenchmarkCache<perf_t>& cache() { return bwd_data_algos; }
 
-  static perf_t findAlgorithm(const ConvolutionArgs& args) {
+  static std::vector<perf_t> findAlgorithms(const ConvolutionArgs& args, bool benchmark) {
     static const algo_t algos[] = {
         CUDNN_CONVOLUTION_BWD_DATA_ALGO_0,
         CUDNN_CONVOLUTION_BWD_DATA_ALGO_1,
@@ -568,39 +526,44 @@ struct algorithm_search<cudnnConvolutionBwdDataAlgo_t> {
                   "Missing cuDNN convolution backward data algorithms.");
     int perf_count;
     std::unique_ptr<perf_t[]> perf_results(new perf_t[num_algos]);
-    size_t max_ws_size = getMaxWorkspaceSize(args, algos, num_algos);
-    Workspace ws(max_ws_size);
-    CUDNN_CHECK(cudnnFindConvolutionBackwardDataAlgorithmEx(
-        args.handle,
-        args.wdesc.desc(), args.weight.data_ptr(),
-        args.odesc.desc(), args.output.data_ptr(),
-        args.cdesc.desc(),
-        args.idesc.desc(), args.input.data_ptr(),
-        num_algos,
-        &perf_count,
-        perf_results.get(),
-        ws.data,
-        ws.size));
-    return getBestAlgorithm(perf_results.get(), args.params.deterministic, perf_count);
-  }
+    if (!benchmark) {
+      AT_CUDNN_CHECK(cudnnGetConvolutionBackwardDataAlgorithm_v7(
+          args.handle,
+          args.wdesc.desc(),
+          args.odesc.desc(),
+          args.cdesc.desc(),
+          args.idesc.desc(),
+          num_algos,
+          &perf_count,
+          perf_results.get()));
+    } else {
+      size_t max_ws_size = getMaxWorkspaceSize(args, algos, num_algos);
+      Workspace ws(max_ws_size);
+      AT_CUDNN_CHECK(cudnnFindConvolutionBackwardDataAlgorithmEx(
+          args.handle,
+          args.wdesc.desc(), args.weight.data_ptr(),
+          args.odesc.desc(), args.output.data_ptr(),
+          args.cdesc.desc(),
+          args.idesc.desc(), args.input.data_ptr(),
+          num_algos,
+          &perf_count,
+          perf_results.get(),
+          ws.data,
+          ws.size));
 
-  static void getAlgorithm(const ConvolutionArgs& args, algo_t* algo) {
-    CUDNN_CHECK(cudnnGetConvolutionBackwardDataAlgorithm(
-        args.handle,
-        args.wdesc.desc(),
-        args.odesc.desc(),
-        args.cdesc.desc(),
-        args.idesc.desc(),
-        CUDNN_CONVOLUTION_BWD_DATA_PREFER_FASTEST,
-        0,
-        algo));
+      // Free the cached blocks in our caching allocator. They are
+      // needed here because the above benchmarking uses a huge amount of memory,
+      // e.g. a few GBs.
+      c10::cuda::CUDACachingAllocator::emptyCache();
+    }
+    return getValidAlgorithms<perf_t>(perf_results.get(), args, perf_count);
   }
 
   static void getWorkspaceSize(
     const ConvolutionArgs& args,
     cudnnConvolutionBwdDataAlgo_t algo, size_t* workspaceSize)
   {
-    CUDNN_CHECK(cudnnGetConvolutionBackwardDataWorkspaceSize(
+    AT_CUDNN_CHECK(cudnnGetConvolutionBackwardDataWorkspaceSize(
         args.handle,
         args.wdesc.desc(),
         args.odesc.desc(),
@@ -612,64 +575,65 @@ struct algorithm_search<cudnnConvolutionBwdDataAlgo_t> {
 };
 
 template<>
-struct algorithm_search<cudnnConvolutionBwdFilterAlgo_t> {
+struct algorithm_search<cudnnConvolutionBwdFilterAlgoPerf_t> {
   using perf_t = cudnnConvolutionBwdFilterAlgoPerf_t;
   using algo_t = cudnnConvolutionBwdFilterAlgo_t;
 
   static constexpr auto DEFAULT_ALGO = CUDNN_CONVOLUTION_BWD_FILTER_ALGO_1;
 
-  static BenchmarkCache<algo_t>& cache() { return bwd_filter_algos; }
+  static BenchmarkCache<perf_t>& cache() { return bwd_filter_algos; }
 
-  static perf_t findAlgorithm(const ConvolutionArgs& args) {
+  static std::vector<perf_t> findAlgorithms(const ConvolutionArgs& args, bool benchmark) {
     static const algo_t algos[] = {
         CUDNN_CONVOLUTION_BWD_FILTER_ALGO_0,
         CUDNN_CONVOLUTION_BWD_FILTER_ALGO_1,
         CUDNN_CONVOLUTION_BWD_FILTER_ALGO_FFT,
         CUDNN_CONVOLUTION_BWD_FILTER_ALGO_3,
         CUDNN_CONVOLUTION_BWD_FILTER_ALGO_WINOGRAD_NONFUSED,
-#if CUDNN_VERSION >= 6000
         CUDNN_CONVOLUTION_BWD_FILTER_ALGO_FFT_TILING,
-#endif
     };
     // NOTE: - 1 because ALGO_WINOGRAD is not implemented
     static constexpr int num_algos = CUDNN_CONVOLUTION_BWD_FILTER_ALGO_COUNT - 1;
     static_assert(sizeof(algos) / sizeof(algos[0]) == num_algos,
                   "Missing cuDNN convolution backward filter algorithms.");
     std::unique_ptr<perf_t[]> perf_results(new perf_t[num_algos]);
-    size_t max_ws_size = getMaxWorkspaceSize(args, algos, num_algos);
     int perf_count;
-    Workspace ws(max_ws_size);
+    if (!benchmark) {
+      AT_CUDNN_CHECK(cudnnGetConvolutionBackwardFilterAlgorithm_v7(
+          args.handle,
+          args.idesc.desc(),
+          args.odesc.desc(),
+          args.cdesc.desc(),
+          args.wdesc.desc(),
+          num_algos,
+          &perf_count,
+          perf_results.get()));
+    } else {
+      size_t max_ws_size = getMaxWorkspaceSize(args, algos, num_algos);
+      Workspace ws(max_ws_size);
+      AT_CUDNN_CHECK(cudnnFindConvolutionBackwardFilterAlgorithmEx(
+          args.handle,
+          args.idesc.desc(), args.input.data_ptr(),
+          args.odesc.desc(), args.output.data_ptr(),
+          args.cdesc.desc(),
+          args.wdesc.desc(), args.weight.data_ptr(),
+          num_algos,
+          &perf_count,
+          perf_results.get(),
+          ws.data,
+          ws.size));
 
-    CUDNN_CHECK(cudnnFindConvolutionBackwardFilterAlgorithmEx(
-        args.handle,
-        args.idesc.desc(), args.input.data_ptr(),
-        args.odesc.desc(), args.output.data_ptr(),
-        args.cdesc.desc(),
-        args.wdesc.desc(), args.weight.data_ptr(),
-        num_algos,
-        &perf_count,
-        perf_results.get(),
-        ws.data,
-        ws.size));
-    return getBestAlgorithm<perf_t>(perf_results.get(), args.params.deterministic, perf_count);
-  }
-
-  static void getAlgorithm(const ConvolutionArgs& args, algo_t* algo) {
-    CUDNN_CHECK(cudnnGetConvolutionBackwardFilterAlgorithm(
-        args.handle,
-        args.idesc.desc(),
-        args.odesc.desc(),
-        args.cdesc.desc(),
-        args.wdesc.desc(),
-        CUDNN_CONVOLUTION_BWD_FILTER_PREFER_FASTEST,
-        0,
-        algo)
-    );
+      // Free the cached blocks in our caching allocator. They are
+      // needed here because the above benchmarking uses a huge amount of memory,
+      // e.g. a few GBs.
+      c10::cuda::CUDACachingAllocator::emptyCache();
+    }
+    return getValidAlgorithms<perf_t>(perf_results.get(), args, perf_count);
   }
 
   static void getWorkspaceSize(const ConvolutionArgs& args, algo_t algo, size_t* workspaceSize)
   {
-    CUDNN_CHECK(cudnnGetConvolutionBackwardFilterWorkspaceSize(
+    AT_CUDNN_CHECK(cudnnGetConvolutionBackwardFilterWorkspaceSize(
         args.handle,
         args.idesc.desc(),
         args.odesc.desc(),
@@ -680,108 +644,88 @@ struct algorithm_search<cudnnConvolutionBwdFilterAlgo_t> {
   }
 };
 
-template<typename algo_t>
-void findAlgorithm(const ConvolutionArgs& args, bool benchmark, algo_t* algo) {
-  using search = algorithm_search<algo_t>;
-  auto& cache = search::cache();
+template<typename perf_t>
+class AlgoIterator {
+  using search = algorithm_search<perf_t>;
+  const ConvolutionArgs &args;
+  bool benchmark;
 
-  if (cache.find(args.params, algo)) {
-    return;
+public:
+  AlgoIterator(const ConvolutionArgs &args, bool benchmark): args(args), benchmark(benchmark) {}
+
+  static std::vector<perf_t> onlyDefaultAlgorithm(const ConvolutionArgs &args) {
+    std::vector<perf_t> perfResults(1);
+    perfResults[0].algo = search::DEFAULT_ALGO;
+    if (args.params.dataType == CUDNN_DATA_HALF) {
+      perfResults[0].mathType = CUDNN_TENSOR_OP_MATH;
+    } else {
+      perfResults[0].mathType = CUDNN_DEFAULT_MATH;
+#if defined(CUDNN_VERSION) && CUDNN_VERSION >= 8000
+      if (args.params.dataType == CUDNN_DATA_FLOAT && !args.params.allow_tf32) {
+        perfResults[0].mathType = CUDNN_FMA_MATH;
+      }
+#endif
+    }
+    search::getWorkspaceSize(args, perfResults[0].algo, &(perfResults[0].memory));
+    return perfResults;
   }
 
-  if (args.params.deterministic && !benchmark) {
-    *algo = search::DEFAULT_ALGO;
-    return;
-  }
+  void try_all(std::function<void (const perf_t &perf)> f) {
+    bool only_use_default = args.params.deterministic && !benchmark;
 
-  if (!benchmark) {
-    search::getAlgorithm(args, algo);
-    return;
-  }
+    auto& cache = search::cache();
+    perf_t algoPerf;
+    if (!only_use_default && cache.find(args.params, &algoPerf)) {
+      try {
+        f(algoPerf);
+        return;
+      } catch (c10::CUDAOutOfMemoryError &e) {
+        cudaGetLastError(); // clear CUDA error
+      }
+    }
 
-  if (cache.find(args.params, algo)) {
-    // re-check cache since another thread may have benchmarked the algorithm
-    return;
+    auto perfResults = only_use_default ? onlyDefaultAlgorithm(args) : search::findAlgorithms(args, benchmark);
+    for (auto &algoPerf : perfResults) {
+      try {
+        f(algoPerf);
+        cache.insert(args.params, algoPerf);
+        return;
+      } catch (c10::CUDAOutOfMemoryError &e) {
+        cudaGetLastError(); // clear CUDA error
+      } catch (c10::CuDNNError &e) {
+        cudaGetLastError(); // clear CUDA error
+      }
+    }
+    TORCH_CHECK(false, "Unable to find a valid cuDNN algorithm to run convolution");
   }
+};
 
-  auto perfResults = search::findAlgorithm(args);
-  // for deterministic algo, look at all the perf results and return the best
-  // deterministic algo
-  if (perfResults.status == CUDNN_STATUS_SUCCESS &&
-      !(args.params.deterministic && perfResults.determinism != CUDNN_DETERMINISTIC)) {
-      *algo = perfResults.algo;
-  } else {
-      *algo = search::DEFAULT_ALGO;
-  }
-  cache.insert(args.params, *algo);
-
-  THCDeviceAllocator* allocator = THCCachingAllocator_get();
-  CUDA_CHECK(allocator->emptyCache(allocator->state));
+inline Tensor allocate_workspace(size_t size, const Tensor &other) {
+  // Sometimes cuDNN returns a workspace size > 2^63, this could makes the allocation of
+  // workspace fail with some 64bit indexing error instead of an OOM error. In such case,
+  // we manually fail with OOM.
+  TORCH_CHECK_WITH(CUDAOutOfMemoryError, size < 1_TiB, "Not enough memory for workspace!");
+  return at::empty({static_cast<int64_t>(size)}, other.options().dtype(kByte));
 }
 
-template<typename algo_t>
-Workspace chooseAlgorithm(
-    const ConvolutionArgs& args,
-    bool benchmark,
-    algo_t* algo)
-{
-  findAlgorithm(args, benchmark, algo);
-
-  using search = algorithm_search<algo_t>;
-  size_t workspace_size;
-  search::getWorkspaceSize(args, *algo, &workspace_size);
-  try {
-    return Workspace(workspace_size);
-  } catch (std::runtime_error& e) {
-    cudaGetLastError(); // clear OOM error
-
-    // switch to default algorithm and record it in the cache to prevent
-    // further OOM errors
-    *algo = search::DEFAULT_ALGO;
-    search::cache().insert(args.params, *algo);
-
-    search::getWorkspaceSize(args, *algo, &workspace_size);
-    return Workspace(workspace_size);
-  }
-}
-
-// ---------------------------------------------------------------------
+// NOTE [ Convolution design ]
 //
-// Bias addition
+// cuDNN convolutions does not handle bias. Bias is handled outside.
 //
-// ---------------------------------------------------------------------
-
-// In-place!
-void cudnn_convolution_add_bias_(CheckedFrom c, const TensorArg& output, const TensorArg& bias)
-{
-  checkAllSameType(c, {output, bias});
-  checkAllSameGPU(c, {output, bias});
-  checkSize(c, bias, { output->size(output_channels_dim) });
-
-  // See Note [CuDNN broadcast padding].  Handle the left padding
-  // ourselves, but use TensorDescriptor's padding argument to do the rest.
-  TensorDescriptor bdesc, odesc;
-  bdesc.set(bias->expand({1, bias->size(0)}), output->dim());
-  odesc.set(*output);
-
-  auto handle = getCudnnHandle();
-  auto dataType = getCudnnDataType(*bias);
-  Constant one(dataType, 1);
-
-  CUDNN_CHECK(cudnnAddTensor(handle, &one, bdesc.desc(), bias->data_ptr(),
-                                     &one, odesc.desc(), output->data_ptr()));
-}
-
 // The general strategy:
 //
 //    - cudnn_convolution (Tensor)
-//      Entry points for clients, takes bias
+//      Entry points for clients
 //
 //    - cudnn_convolution_forward (TensorArg)
 //      Entry point, which may be reused between regular
-//      convolution and transposed convolution.  Does NOT take bias.
+//      convolution and transposed convolution.
 //
 //    - raw_cudnn_convolution_forward_out (Tensor)
+//      Functiont that handles tensors that are too large to use 32bit indexing.
+//      It just split the tensor and dispatches to `raw_cudnn_convolution_forward_out_32bit`.
+//
+//    - raw_cudnn_convolution_forward_out_32bit (Tensor)
 //      Low level function which invokes CuDNN, and takes an output
 //      tensor which is directly written to (thus _out).
 //
@@ -789,12 +733,77 @@ void cudnn_convolution_add_bias_(CheckedFrom c, const TensorArg& output, const T
 // responsibility:
 //  - Things that happen in at::Tensor
 //    - TensorArg allocation
-//    - setCuDNNStreamToCurrent
 //  - Things that happen in TensorArg
 //    - Check arguments (type, GPU, shape)
 //
 // TODO: Consider renaming zero-indexed arguments to "self"
 
+
+// ---------------------------------------------------------------------
+//
+// Splitting to 32bit
+//
+// ---------------------------------------------------------------------
+
+template <typename func_t>
+static inline void split_batch_dim_to_32bit_out(
+    const at::Tensor& output,
+    const at::Tensor& input,
+    const at::Tensor& weight,
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
+    bool benchmark, bool deterministic, bool allow_tf32, 
+    int64_t max_worksize, func_t func_32bit) {
+  constexpr int64_t int_max = std::numeric_limits<int>::max();
+  const int64_t ni = input.numel();
+  const int64_t no = output.numel();
+  // Assume the shape of the tensor is (N, C, D1, D2, ...)
+  // if N * C * D1 * D2 * ... <= int_max, then no need to split at all
+  if (ni <= int_max && no <= int_max) {
+    func_32bit(output, input, weight, padding, stride, dilation, groups, benchmark, deterministic, allow_tf32);
+    return;
+  }
+  // else, if C * D1 * D2 * ... <= int_max, then we just need to split across the N dimension
+  //
+  // Here we use a simple heuristics to determine the size of each split
+  // We don't max out the 2^31 address space because this number is super
+  // large and very likely to get an OOM.
+  int64_t n = output.size(0);
+  int64_t max_inner_size = std::max<int64_t>(ni, no) / n;
+  int64_t split_size = std::max<int64_t>(max_worksize / max_inner_size, 1L);
+  int64_t num_splits = (n + split_size - 1) / split_size;
+  if (split_size * max_inner_size < int_max) {
+    for (int64_t i = 0; i < num_splits; i++) {
+      int64_t start = split_size * i;
+      int64_t split_size_ = std::min<int64_t>(split_size, n - start);
+      Tensor input_ = input.narrow(0, start, split_size_);
+      Tensor output_ = output.narrow(0, start, split_size_);
+      func_32bit(output_, input_, weight, padding, stride, dilation, groups, benchmark, deterministic, allow_tf32);
+    }
+    return;
+  }
+  // If control flow reaches here, this means even splitting N is not enough, then things starts to become complicated:
+  // For example, for conv2d, there following questions needs to be considered.
+  // - Is the memory layout NCHW or NHWC ?
+  // - If the conv is NCHW -> NC'H'W', then should we
+  //   - split only NC?
+  //   - split only N'C'?
+  //   - split both?
+  // - If the conv is NHWC, then we need to split across H, we need to be very careful about the boundary condition
+  //   to make sure that the boundary is handled correctly.
+  // - If we decide to make these splits, is the memory contiguous? Do we need to copy the memory?
+  // Considering the complexity of this issue, it is better not to use cuDNN for this case
+  TORCH_INTERNAL_ASSERT(false, "This case should not be dispatched to cuDNN.");
+}
+
+
+#if defined(CUDNN_VERSION) && CUDNN_VERSION >= 8000
+#define ASSERT_CORRECT_PRECISION(math_type)                                     \
+if (args.params.dataType == CUDNN_DATA_FLOAT) {                                 \
+  TORCH_INTERNAL_ASSERT(args.params.allow_tf32 || math_type == CUDNN_FMA_MATH); \
+}
+#else
+#define ASSERT_CORRECT_PRECISION(math_type)
+#endif  // CUDNN_VERSION >= 8000
 
 
 // ---------------------------------------------------------------------
@@ -812,94 +821,106 @@ void cudnn_convolution_add_bias_(CheckedFrom c, const TensorArg& output, const T
 //    - It takes output as a parameter (this should be computed!)
 //    - It doesn't do input checking
 //    - It doesn't resize output (it is assumed to be correctly sized)
-//    - It takes a ConvolutionParams struct
 //
-void raw_cudnn_convolution_forward_out(
+void raw_cudnn_convolution_forward_out_32bit(
     const Tensor& output, const Tensor& input, const Tensor& weight,
-    IntList padding, IntList stride, IntList dilation, int64_t groups,
-    bool benchmark, bool deterministic) {
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
+    bool benchmark, bool deterministic, bool allow_tf32) {
 
   auto dataType = getCudnnDataType(input);
 
   ConvolutionArgs args{ input, output, weight };
   args.handle = getCudnnHandle();
-  setConvolutionParams(&args.params, input, weight, padding, stride, dilation, groups, deterministic);
+  setConvolutionParams(&args.params, input, weight, padding, stride, dilation, groups, deterministic, allow_tf32);
   args.idesc.set(input);
-  args.wdesc.set(weight);
+  args.wdesc.set(weight, 0, input.suggest_memory_format()==at::MemoryFormat::ChannelsLast);
   args.odesc.set(output);
-  args.cdesc.set(dataType, input.dim() - 2, args.params.padding, args.params.stride, args.params.dilation, args.params.groups);
+  args.cdesc.set(dataType, input.dim() - 2, args.params.padding, args.params.stride, args.params.dilation, args.params.groups, args.params.allow_tf32);
 
   // TODO: when we do legacy group convolution support, we'll repeatedly
   // reinitialize the workspace for each convolution we do.  This is
   // wasteful; we'd rather reuse the workspace.  OTOH, legacy group
   // convolution support is already pretty slow, so this might not
   // matter.  (This applies to raw_cudnn_convolution_backward_input as well.)
-  cudnnConvolutionFwdAlgo_t fwdAlg;
-  Workspace workspace = chooseAlgorithm(args, benchmark, &fwdAlg);
+  AlgoIterator<cudnnConvolutionFwdAlgoPerf_t>(args, benchmark).try_all(
+    [&](const cudnnConvolutionFwdAlgoPerf_t &fwdAlgPerf){
+      Tensor workspace = allocate_workspace(fwdAlgPerf.memory, input);
 
-  Constant one(dataType, 1);
-  Constant zero(dataType, 0);
+      // update convDesc mathType since cudnn 7.4+ now requires both algo + mathType to figure out
+      // whether to use Tensor core kernels or not
+      // See Note [behavior of cudnnFind and cudnnGet]
+      ASSERT_CORRECT_PRECISION(fwdAlgPerf.mathType);
+      AT_CUDNN_CHECK(cudnnSetConvolutionMathType(args.cdesc.mut_desc(), fwdAlgPerf.mathType));
 
-  CUDNN_CHECK(cudnnConvolutionForward(
-    args.handle,
-    &one, args.idesc.desc(), input.data_ptr(),
-    args.wdesc.desc(), weight.data_ptr(),
-    args.cdesc.desc(), fwdAlg, workspace.data, workspace.size,
-    &zero, args.odesc.desc(), output.data_ptr()));
+      Constant one(dataType, 1);
+      Constant zero(dataType, 0);
+
+      AT_CUDNN_CHECK(cudnnConvolutionForward(
+        args.handle,
+        &one, args.idesc.desc(), input.data_ptr(),
+        args.wdesc.desc(), weight.data_ptr(),
+        args.cdesc.desc(), fwdAlgPerf.algo, workspace.data_ptr(), fwdAlgPerf.memory,
+        &zero, args.odesc.desc(), output.data_ptr()));
+      }
+  );
+}
+
+void raw_cudnn_convolution_forward_out(
+    const Tensor& output, const Tensor& input, const Tensor& weight,
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
+    bool benchmark, bool deterministic, bool allow_tf32) {
+  split_batch_dim_to_32bit_out(output, input, weight, padding, stride, dilation, groups, benchmark, deterministic, allow_tf32, 1024 * 1024 * 256, raw_cudnn_convolution_forward_out_32bit);
 }
 
 Tensor cudnn_convolution_forward(
     CheckedFrom c,
     const TensorArg& input, const TensorArg& weight,
-    IntList padding, IntList stride, IntList dilation, int64_t groups,
-    bool benchmark, bool deterministic)
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
+    bool benchmark, bool deterministic, bool allow_tf32)
 {
   checkAllSameType(c, {input, weight});
   checkAllSameGPU(c, {input, weight});
 
-  auto output_t = input->type().tensor(
+  auto layout = cudnn_conv_use_channels_last(*input, *weight) ?
+      at::MemoryFormat::ChannelsLast : at::MemoryFormat::Contiguous;
+  auto output_t = at::empty(
                     conv_output_size(input->sizes(), weight->sizes(),
-                                     padding, stride, dilation, groups));
+                                     padding, stride, dilation),
+                    input->options(),
+                    layout);
+
+  if (output_t.numel() == 0) {
+    return output_t;
+  }
 
   // Avoid ambiguity of "output" when this is being used as backwards
   TensorArg output{ output_t, "result", 0 };
   convolution_shape_check(c, input, weight, output, padding, stride, dilation, groups);
 
   // See #4500
-  Tensor weight_contig = weight->contiguous();
+  Tensor weight_contig = weight->contiguous(layout);
+  // Make sure that NC11 strides follow formula
+  weight_contig.resize_(weight_contig.sizes(), layout);
+  Tensor input_contig = input->contiguous(layout);
+  input_contig.resize_(input_contig.sizes(), layout);
 
-#if CUDNN_VERSION < 7000
-  for (int i = 0; i < groups; i++) {
-    raw_cudnn_convolution_forward_out(
-        narrowGroup(*output, output_channels_dim,        i, groups),
-        narrowGroup(*input,  input_channels_dim,         i, groups),
-        narrowGroup(weight_contig, weight_output_channels_dim, i, groups),
-        padding, stride, dilation, 1, benchmark, deterministic);
-  }
-#else
   raw_cudnn_convolution_forward_out(
-      *output, *input, weight_contig,
-      padding, stride, dilation, groups, benchmark, deterministic);
-#endif
+      *output, input_contig, weight_contig,
+      padding, stride, dilation, groups, benchmark, deterministic, allow_tf32);
 
   return *output;
 }
 
 Tensor cudnn_convolution(
-    const Tensor& input_t, const Tensor& weight_t, const Tensor& bias_t,
-    IntList padding, IntList stride, IntList dilation,
-    int64_t groups, bool benchmark, bool deterministic)
+    const Tensor& input_t, const Tensor& weight_t,
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation,
+    int64_t groups, bool benchmark, bool deterministic, bool allow_tf32)
 {
   TensorArg input  { input_t,  "input",  1 },
-            weight { weight_t, "weight", 2 },
-            bias   { bias_t,   "bias",   3 };
-  setCuDNNStreamToCurrent();
+            weight { weight_t, "weight", 2 };
   CheckedFrom c = "cudnn_convolution";
   auto output_t = cudnn_convolution_forward(
-    c, input, weight, padding, stride, dilation, groups, benchmark, deterministic);
-  if (bias->defined()) {
-    cudnn_convolution_add_bias_(c, { output_t, "result", 0 }, bias);
-  }
+    c, input, weight, padding, stride, dilation, groups, benchmark, deterministic, allow_tf32);
   return output_t;
 }
 
@@ -907,36 +928,32 @@ Tensor cudnn_convolution(
 // resolve
 Tensor cudnn_convolution_transpose_backward_input(
     const Tensor& grad_output_t, const Tensor& weight_t,
-    IntList padding, IntList stride, IntList dilation,
-    int64_t groups, bool benchmark, bool deterministic)
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation,
+    int64_t groups, bool benchmark, bool deterministic, bool allow_tf32)
 {
   TensorArg grad_output { grad_output_t,  "grad_output", 1 },
             weight      { weight_t, "weight", 2 };
-  setCuDNNStreamToCurrent();
   return cudnn_convolution_forward(
     "cudnn_convolution_transpose_backward_input",
-    grad_output, weight, padding, stride, dilation, groups, benchmark, deterministic);
+    grad_output, weight, padding, stride, dilation, groups, benchmark, deterministic, allow_tf32);
 }
 
-std::tuple<at::Tensor,at::Tensor,at::Tensor> cudnn_convolution_transpose_backward(
+std::tuple<at::Tensor,at::Tensor> cudnn_convolution_transpose_backward(
     const at::Tensor& input, const at::Tensor& grad_output_t, const at::Tensor& weight,
-    IntList padding, IntList output_padding, IntList stride, IntList dilation, int64_t groups,
-    bool benchmark, bool deterministic, std::array<bool,3> output_mask) {
+    IntArrayRef padding, IntArrayRef output_padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
+    bool benchmark, bool deterministic, bool allow_tf32, std::array<bool,2> output_mask) {
 
-  Tensor grad_output = grad_output_t.contiguous();
+  Tensor grad_output = grad_output_t.contiguous(input.suggest_memory_format());
 
-  Tensor grad_input, grad_weight, grad_bias;
+  Tensor grad_input, grad_weight;
   if (output_mask[0]) {
-    grad_input = at::cudnn_convolution_transpose_backward_input(grad_output, weight, padding, stride, dilation, groups, benchmark, deterministic);
+    grad_input = at::cudnn_convolution_transpose_backward_input(grad_output, weight, padding, stride, dilation, groups, benchmark, deterministic, allow_tf32);
   }
   if (output_mask[1]) {
-    grad_weight = at::cudnn_convolution_transpose_backward_weight(weight.sizes(), grad_output, input, padding, stride, dilation, groups, benchmark, deterministic);
-  }
-  if (output_mask[2]) {
-    grad_bias = at::cudnn_convolution_backward_bias(grad_output);
+    grad_weight = at::cudnn_convolution_transpose_backward_weight(weight.sizes(), grad_output, input, padding, stride, dilation, groups, benchmark, deterministic, allow_tf32);
   }
 
-  return std::tuple<Tensor,Tensor,Tensor>{grad_input, grad_weight, grad_bias};
+  return std::tuple<Tensor,Tensor>{grad_input, grad_weight};
 }
 
 // ---------------------------------------------------------------------
@@ -945,37 +962,56 @@ std::tuple<at::Tensor,at::Tensor,at::Tensor> cudnn_convolution_transpose_backwar
 //
 // ---------------------------------------------------------------------
 
-void raw_cudnn_convolution_backward_input_out(
+void raw_cudnn_convolution_backward_input_out_32bit(
     const at::Tensor& grad_input,
     const at::Tensor& grad_output,
     const at::Tensor& weight,
-    IntList padding, IntList stride, IntList dilation, int64_t groups,
-    bool benchmark, bool deterministic) {
-
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
+    bool benchmark, bool deterministic, bool allow_tf32) {
   auto dataType = getCudnnDataType(grad_output);
 
   ConvolutionArgs args{ grad_input, grad_output, weight };
   args.handle = getCudnnHandle();
-  setConvolutionParams(&args.params, grad_input, weight, padding, stride, dilation, groups, deterministic);
+  setConvolutionParams(&args.params, grad_input, weight, padding, stride, dilation, groups, deterministic, allow_tf32);
   args.idesc.set(grad_input);
-  args.wdesc.set(weight);
+  args.wdesc.set(weight, 0, grad_output.suggest_memory_format()==at::MemoryFormat::ChannelsLast);
   args.odesc.set(grad_output);
-  args.cdesc.set(dataType, grad_output.dim() - 2, args.params.padding, args.params.stride, args.params.dilation, args.params.groups);
+  args.cdesc.set(dataType, grad_output.dim() - 2, args.params.padding, args.params.stride, args.params.dilation, args.params.groups, args.params.allow_tf32);
 
-  cudnnConvolutionBwdDataAlgo_t bwdDataAlg;
-  Workspace workspace = chooseAlgorithm(args, benchmark, &bwdDataAlg);
+  AlgoIterator<cudnnConvolutionBwdDataAlgoPerf_t>(args, benchmark).try_all(
+    [&](const cudnnConvolutionBwdDataAlgoPerf_t &bwdDataAlgPerf){
+      Tensor workspace = allocate_workspace(bwdDataAlgPerf.memory, grad_output);
 
-  Constant one(dataType, 1);
-  Constant zero(dataType, 0);
+      // update convDesc mathType since cudnn 7.4+ now requires both algo + mathType to figure out
+      // whether to use Tensor core kernels or not
+      // See Note [behavior of cudnnFind and cudnnGet]
+      ASSERT_CORRECT_PRECISION(bwdDataAlgPerf.mathType);
+      AT_CUDNN_CHECK(cudnnSetConvolutionMathType(args.cdesc.mut_desc(), bwdDataAlgPerf.mathType));
 
-  CUDNN_CHECK(cudnnConvolutionBackwardData(
-      args.handle,
-      &one, args.wdesc.desc(), weight.data_ptr(),
-      args.odesc.desc(), grad_output.data_ptr(),
-      args.cdesc.desc(), bwdDataAlg, workspace.data, workspace.size,
-      &zero, args.idesc.desc(), grad_input.data_ptr()));
+      Constant one(dataType, 1);
+      Constant zero(dataType, 0);
+
+      AT_CUDNN_CHECK(cudnnConvolutionBackwardData(
+          args.handle,
+          &one, args.wdesc.desc(), weight.data_ptr(),
+          args.odesc.desc(), grad_output.data_ptr(),
+          args.cdesc.desc(), bwdDataAlgPerf.algo, workspace.data_ptr(), bwdDataAlgPerf.memory,
+          &zero, args.idesc.desc(), grad_input.data_ptr()));
+    }
+  );
 }
 
+void raw_cudnn_convolution_backward_input_out(
+    const at::Tensor& grad_input,
+    const at::Tensor& grad_output,
+    const at::Tensor& weight,
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
+    bool benchmark, bool deterministic, bool allow_tf32) {
+  split_batch_dim_to_32bit_out(grad_input, grad_output, weight, padding, stride, dilation, groups, benchmark, deterministic, allow_tf32, 1024 * 1024 * 128, raw_cudnn_convolution_backward_input_out_32bit);
+}
+
+// NOTE [ Backward vs transpose convolutions ]
+//
 // Backward and transpose are algorithmically equivalent, but they
 // compute their geometry differently.  In a backwards, you knew what
 // the original size of the input tensor was, so you can cache that
@@ -988,35 +1024,32 @@ void raw_cudnn_convolution_backward_input_out(
 
 Tensor cudnn_convolution_backward_input(
     CheckedFrom c,
-    IntList input_size, const TensorArg& grad_output, const TensorArg& weight,
-    IntList padding, IntList stride, IntList dilation, int64_t groups,
-    bool benchmark, bool deterministic)
+    IntArrayRef input_size, const TensorArg& grad_output, const TensorArg& weight,
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
+    bool benchmark, bool deterministic, bool allow_tf32)
 {
   checkAllSameType(c, {grad_output, weight});
   checkAllSameGPU(c, {grad_output, weight});
 
-  auto grad_input_t = grad_output->type().tensor(input_size);
+  auto layout = cudnn_conv_use_channels_last(*grad_output, *weight) ?
+      at::MemoryFormat::ChannelsLast : at::MemoryFormat::Contiguous;
+  auto grad_input_t = at::empty(input_size, grad_output->options(), layout);
 
   // Avoid "grad_input" when this is being used as transposed convolution
   TensorArg grad_input{ grad_input_t, "result", 0 };
   convolution_shape_check(c, grad_input, weight, grad_output, padding, stride, dilation, groups);
 
   // See #4500
-  Tensor weight_contig = weight->contiguous();
+  Tensor weight_contig = weight->contiguous(layout);
+  // Make sure that NC11 strides follow formula
+  weight_contig.resize_(weight_contig.sizes(), layout);
 
-#if CUDNN_VERSION < 7000
-  for (int i = 0; i < groups; i++) {
-    raw_cudnn_convolution_backward_input_out(
-        narrowGroup(*grad_input, input_channels_dim, i, groups),
-        narrowGroup(*grad_output, output_channels_dim, i, groups),
-        narrowGroup(weight_contig, weight_output_channels_dim, i, groups),
-        padding, stride, dilation, 1, benchmark, deterministic);
-  }
-#else
+  Tensor grad_output_contig = grad_output->contiguous(layout);
+  grad_output_contig.resize_(grad_output_contig.sizes(), layout);
+
   raw_cudnn_convolution_backward_input_out(
-      *grad_input, *grad_output, weight_contig,
-      padding, stride, dilation, groups, benchmark, deterministic);
-#endif
+      *grad_input, grad_output_contig, weight_contig,
+      padding, stride, dilation, groups, benchmark, deterministic, allow_tf32);
 
   return *grad_input;
 }
@@ -1024,64 +1057,65 @@ Tensor cudnn_convolution_backward_input(
 Tensor cudnn_convolution_transpose_forward(
     CheckedFrom c,
     const TensorArg& grad_output, const TensorArg& weight,
-    IntList padding, IntList output_padding, IntList stride, IntList dilation, int64_t groups,
-    bool benchmark, bool deterministic)
+    IntArrayRef padding, IntArrayRef output_padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
+    bool benchmark, bool deterministic, bool allow_tf32)
 {
   auto input_size = conv_input_size(grad_output->sizes(), weight->sizes(),
                                     padding, output_padding, stride, dilation, groups);
   return cudnn_convolution_backward_input(c, input_size, grad_output, weight,
-                                    padding, stride, dilation, groups, benchmark, deterministic);
+                                    padding, stride, dilation, groups, benchmark, deterministic, allow_tf32);
 }
 
 Tensor cudnn_convolution_backward_input(
-    IntList input_size, const Tensor& grad_output_t, const Tensor& weight_t,
-    IntList padding, IntList stride, IntList dilation, int64_t groups,
-    bool benchmark, bool deterministic)
+    IntArrayRef input_size, const Tensor& grad_output_t, const Tensor& weight_t,
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
+    bool benchmark, bool deterministic, bool allow_tf32)
 {
   TensorArg grad_output{ grad_output_t, "grad_output", 1 },
             weight{ weight_t, "weight", 2 };
-  setCuDNNStreamToCurrent();
   return cudnn_convolution_backward_input(
       "cudnn_convolution_backward_input",
       input_size, grad_output, weight,
-      padding, stride, dilation, groups, benchmark, deterministic);
+      padding, stride, dilation, groups, benchmark, deterministic, allow_tf32);
 }
 
-std::tuple<at::Tensor,at::Tensor,at::Tensor> cudnn_convolution_backward(
+std::tuple<at::Tensor,at::Tensor> cudnn_convolution_backward(
     const at::Tensor& input, const at::Tensor& grad_output_t, const at::Tensor& weight,
-    IntList padding, IntList stride, IntList dilation, int64_t groups,
-    bool benchmark, bool deterministic, std::array<bool,3> output_mask) {
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
+    bool benchmark, bool deterministic, bool allow_tf32, std::array<bool,2> output_mask) {
 
-  Tensor grad_output = grad_output_t.contiguous();
+  Tensor grad_output = grad_output_t.contiguous(input.suggest_memory_format());
 
-  Tensor grad_input, grad_weight, grad_bias;
-  if (output_mask[0]) {
-    grad_input = at::cudnn_convolution_backward_input(input.sizes(), grad_output, weight, padding, stride, dilation, groups, benchmark, deterministic);
-  }
-  if (output_mask[1]) {
-    grad_weight = at::cudnn_convolution_backward_weight(weight.sizes(), grad_output, input, padding, stride, dilation, groups, benchmark, deterministic);
-  }
-  if (output_mask[2]) {
-    grad_bias = at::cudnn_convolution_backward_bias(grad_output);
+  Tensor grad_input, grad_weight;
+  if (input.numel() == 0) {
+    if (output_mask[0]) {
+      grad_input = at::empty_like(input, LEGACY_CONTIGUOUS_MEMORY_FORMAT);
+    }
+    if (output_mask[1]) {
+      grad_weight = at::zeros_like(weight, LEGACY_CONTIGUOUS_MEMORY_FORMAT);
+    }
+  } else {
+    if (output_mask[0]) {
+      grad_input = at::cudnn_convolution_backward_input(input.sizes(), grad_output, weight, padding, stride, dilation, groups, benchmark, deterministic, allow_tf32);
+    }
+    if (output_mask[1]) {
+      grad_weight = at::cudnn_convolution_backward_weight(weight.sizes(), grad_output, input, padding, stride, dilation, groups, benchmark, deterministic, allow_tf32);
+    }
   }
 
-  return std::tuple<Tensor,Tensor,Tensor>{grad_input, grad_weight, grad_bias};
+  return std::tuple<Tensor,Tensor>{grad_input, grad_weight};
 }
 
 Tensor cudnn_convolution_transpose(
-    const Tensor& input_t, const Tensor& weight_t, const Tensor& bias_t,
-    IntList padding, IntList output_padding, IntList stride, IntList dilation,
-    int64_t groups, bool benchmark, bool deterministic)
+    const Tensor& input_t, const Tensor& weight_t,
+    IntArrayRef padding, IntArrayRef output_padding, IntArrayRef stride, IntArrayRef dilation,
+    int64_t groups, bool benchmark, bool deterministic, bool allow_tf32)
 {
   TensorArg input  { input_t,  "input",  1 },
-            weight { weight_t, "weight", 2 },
-            bias   { bias_t,   "bias",   3 };
+            weight { weight_t, "weight", 2 };
   CheckedFrom c = "cudnn_convolution_transpose";
   auto output_t = cudnn_convolution_transpose_forward(
-    c, input, weight, padding, output_padding, stride, dilation, groups, benchmark, deterministic);
-  if (bias->defined()) {
-    cudnn_convolution_add_bias_(c, { output_t, "result", 0 }, bias);
-  }
+    c, input, weight, padding, output_padding, stride, dilation, groups, benchmark, deterministic, allow_tf32);
   return output_t;
 }
 
@@ -1091,135 +1125,201 @@ Tensor cudnn_convolution_transpose(
 //
 // ---------------------------------------------------------------------
 
-void raw_cudnn_convolution_backward_weight_out(
+void raw_cudnn_convolution_backward_weight_out_32bit(
     const Tensor& grad_weight, const Tensor& grad_output, const Tensor& input,
-    IntList padding, IntList stride, IntList dilation, int64_t groups,
-    bool benchmark, bool deterministic) {
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
+    bool benchmark, bool deterministic, bool allow_tf32) {
 
   auto dataType = getCudnnDataType(input);
 
   ConvolutionArgs args{ input, grad_output, grad_weight };
   args.handle = getCudnnHandle();
-  setConvolutionParams(&args.params, input, grad_weight, padding, stride, dilation, groups, deterministic);
+  setConvolutionParams(&args.params, input, grad_weight, padding, stride, dilation, groups, deterministic, allow_tf32);
   args.idesc.set(input);
-  args.wdesc.set(grad_weight);
+  args.wdesc.set(grad_weight, 0, input.suggest_memory_format()==at::MemoryFormat::ChannelsLast);
   args.odesc.set(grad_output);
-  args.cdesc.set(dataType, input.dim() - 2, args.params.padding, args.params.stride, args.params.dilation, args.params.groups);
+  args.cdesc.set(dataType, input.dim() - 2, args.params.padding, args.params.stride, args.params.dilation, args.params.groups, args.params.allow_tf32);
 
-  cudnnConvolutionBwdFilterAlgo_t bwdFilterAlg;
-  Workspace workspace = chooseAlgorithm(args, benchmark, &bwdFilterAlg);
+  AlgoIterator<cudnnConvolutionBwdFilterAlgoPerf_t>(args, benchmark).try_all(
+    [&](const cudnnConvolutionBwdFilterAlgoPerf_t &bwdFilterAlgPerf){
+      Tensor workspace = allocate_workspace(bwdFilterAlgPerf.memory, input);
 
-  Constant one(dataType, 1);
-  Constant zero(dataType, 0);
+      // update convDesc mathType since cudnn 7.4+ now requires both algo + mathType to figure out
+      // whether to use Tensor core kernels or not
+      // See Note [behavior of cudnnFind and cudnnGet]
+      ASSERT_CORRECT_PRECISION(bwdFilterAlgPerf.mathType);
+      AT_CUDNN_CHECK(cudnnSetConvolutionMathType(args.cdesc.mut_desc(), bwdFilterAlgPerf.mathType));
 
-  CUDNN_CHECK(cudnnConvolutionBackwardFilter(
-      args.handle,
-      &one, args.idesc.desc(), input.data_ptr(),
-      args.odesc.desc(), grad_output.data_ptr(),
-      args.cdesc.desc(), bwdFilterAlg, workspace.data, workspace.size,
-      &zero, args.wdesc.desc(), grad_weight.data_ptr()));
+      Constant one(dataType, 1);
+      Constant zero(dataType, 0);
+
+      AT_CUDNN_CHECK(cudnnConvolutionBackwardFilter(
+          args.handle,
+          &one, args.idesc.desc(), input.data_ptr(),
+          args.odesc.desc(), grad_output.data_ptr(),
+          args.cdesc.desc(), bwdFilterAlgPerf.algo, workspace.data_ptr(), bwdFilterAlgPerf.memory,
+          &zero, args.wdesc.desc(), grad_weight.data_ptr()));
+    }
+  );
+}
+
+void raw_cudnn_convolution_backward_weight_out(
+    const Tensor& grad_weight, const Tensor& grad_output, const Tensor& input,
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
+    bool benchmark, bool deterministic, bool allow_tf32) {
+  constexpr int64_t int_max = std::numeric_limits<int>::max();
+  const int64_t ni = input.numel();
+  const int64_t no = grad_output.numel();
+  // Assume the shape of the tensor is (N, C, D1, D2, ...)
+  // if N * C * D1 * D2 * ... <= int_max, then no need to split at all
+  if (ni <= int_max && no <= int_max) {
+    raw_cudnn_convolution_backward_weight_out_32bit(grad_weight, grad_output, input, padding, stride, dilation, groups, benchmark, deterministic, allow_tf32);
+    return;
+  }
+  // else, if C * D1 * D2 * ... <= int_max, then we just need to split across the N dimension
+  //
+  // Here we use a simple heuristics to determine the size of each split
+  // We don't max out the 2^31 address space because this number is super
+  // large and very likely to get an OOM.
+  int64_t n = grad_output.size(0);
+  int64_t max_inner_size = std::max<int64_t>(ni, no) / n;
+  int64_t split_size = std::max<int64_t>(1024 * 1024 * 512 / max_inner_size, 1L);
+  int64_t num_splits = (n + split_size - 1) / split_size;
+  if (split_size * max_inner_size < int_max) {
+    for (int64_t i = 0; i < num_splits; i++) {
+      int64_t start = split_size * i;
+      int64_t split_size_ = std::min<int64_t>(split_size, n - start);
+      Tensor input_ = input.narrow(0, start, split_size_);
+      Tensor grad_output_ = grad_output.narrow(0, start, split_size_);
+      Tensor grad_weight_ = at::empty_like(grad_weight);
+      raw_cudnn_convolution_backward_weight_out_32bit(grad_weight_, grad_output_, input_, padding, stride, dilation, groups, benchmark, deterministic, allow_tf32);
+      grad_weight.add_(grad_weight_);
+    }
+    return;
+  }
+  // If control flow reaches here, this means even splitting N is not enough, then things starts to become complicated:
+  // For example, for conv2d, there following questions needs to be considered.
+  // - Is the memory layout NCHW or NHWC ?
+  // - If the conv is NCHW -> NC'H'W', then should we
+  //   - split only NC?
+  //   - split only N'C'?
+  //   - split both?
+  // - If the conv is NHWC, then we need to split across H, we need to be very careful about the boundary condition
+  //   to make sure that the boundary is handled correctly.
+  // - If we decide to make these splits, is the memory contiguous? Do we need to copy the memory?
+  // Considering the complexity of this issue, it is better not to use cuDNN for this case
+  TORCH_INTERNAL_ASSERT(false, "This case should not be dispatched to cuDNN.");
 }
 
 Tensor cudnn_convolution_backward_weight(
     CheckedFrom c,
-    IntList weight_size, const TensorArg& grad_output, const TensorArg& input,
-    IntList padding, IntList stride, IntList dilation, int64_t groups,
-    bool benchmark, bool deterministic)
+    IntArrayRef weight_size, const Tensor& grad_output_t, const Tensor& input_t,
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
+    bool benchmark, bool deterministic, bool allow_tf32)
 {
+  auto layout = cudnn_conv_use_channels_last(input_t, grad_output_t) ?
+      at::MemoryFormat::ChannelsLast : at::MemoryFormat::Contiguous;
 
-  checkAllSameType(c, {grad_output, input});
-  checkAllSameGPU(c, {grad_output, input});
+  Tensor grad_output_contig_t = grad_output_t.contiguous(layout);
+  // Make sure that NC11 strides follow formula
+  grad_output_contig_t.resize_(grad_output_contig_t.sizes(), layout);
+  TensorArg grad_output_contig{ grad_output_contig_t, "grad_output", 1 };
 
-  auto grad_weight_t = grad_output->type().tensor(weight_size);
+  Tensor input_contig_t = input_t.contiguous(layout);
+  input_contig_t.resize_(input_contig_t.sizes(), layout);
+  TensorArg input{ input_contig_t, "input", 2};
+
+  checkAllSameType(c, {grad_output_contig, input});
+  checkAllSameGPU(c, {grad_output_contig, input});
+
+  auto grad_weight_t = at::empty(weight_size, grad_output_contig->options(), layout);
 
   // For uniformity with everything else, although it seems grad_weight
   // would be unambiguous too.
   TensorArg grad_weight{ grad_weight_t, "result", 0 };
-  convolution_shape_check(c, input, grad_weight, grad_output, padding, stride, dilation, groups);
+  convolution_shape_check(c, input, grad_weight, grad_output_contig, padding, stride, dilation, groups);
 
-#if CUDNN_VERSION < 7000
-  for (int i = 0; i < groups; i++) {
-    raw_cudnn_convolution_backward_weight_out(
-        narrowGroup(*grad_weight, weight_output_channels_dim, i, groups),
-        narrowGroup(*grad_output, output_channels_dim, i, groups),
-        narrowGroup(*input, input_channels_dim, i, groups),
-        padding, stride, dilation, groups, benchmark, deterministic);
-  }
-#else
   raw_cudnn_convolution_backward_weight_out(
-      *grad_weight, *grad_output, *input,
-      padding, stride, dilation, groups, benchmark, deterministic);
-#endif
+      *grad_weight, *grad_output_contig, *input,
+      padding, stride, dilation, groups, benchmark, deterministic, allow_tf32);
 
   return grad_weight_t;
 }
 
 Tensor cudnn_convolution_backward_weight(
-    IntList weight_size,
+    IntArrayRef weight_size,
     const Tensor& grad_output_t,
     const Tensor& input_t,
-    IntList padding, IntList stride, IntList dilation, int64_t groups,
-    bool benchmark, bool deterministic)
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
+    bool benchmark, bool deterministic, bool allow_tf32)
 {
-  TensorArg grad_output{ grad_output_t, "grad_output", 1 },
-            input{ input_t, "input", 2 };
-  setCuDNNStreamToCurrent();
   return cudnn_convolution_backward_weight(
       "cudnn_convolution_backward_weight",
-      weight_size, grad_output, input,
-      padding, stride, dilation, groups, benchmark, deterministic);
+      weight_size, grad_output_t, input_t,
+      padding, stride, dilation, groups, benchmark, deterministic, allow_tf32);
 }
 
 Tensor cudnn_convolution_transpose_backward_weight(
-    IntList weight_size,
+    IntArrayRef weight_size,
     const Tensor& grad_output_t,
     const Tensor& input_t,
-    IntList padding, IntList stride, IntList dilation, int64_t groups,
-    bool benchmark, bool deterministic)
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
+    bool benchmark, bool deterministic, bool allow_tf32)
 {
-  TensorArg grad_output{ grad_output_t, "grad_output", 1 },
-            input{ input_t, "input", 2 };
-  setCuDNNStreamToCurrent();
   return cudnn_convolution_backward_weight(
       "cudnn_convolution_backward_weight",
-      weight_size, input, grad_output,
-      padding, stride, dilation, groups, benchmark, deterministic);
+      weight_size, input_t, grad_output_t,
+      padding, stride, dilation, groups, benchmark, deterministic, allow_tf32);
 }
 
-// ---------------------------------------------------------------------
-//
-// Convolution backward (bias)
-//
-// ---------------------------------------------------------------------
-
-Tensor cudnn_convolution_backward_bias(
-    const Tensor& grad_output_t)
-{
-  TensorArg grad_output{ grad_output_t, "grad_output", 1 };
-  setCuDNNStreamToCurrent();
-
-  auto grad_bias_t = grad_output->type().tensor(
-                        { grad_output->size(output_channels_dim) });
-
-  TensorArg grad_bias{ grad_bias_t, "result", 0 };
-
-  // See Note [CuDNN broadcast padding].  Handle the left padding
-  // ourselves, but use TensorDescriptor's pad argument to do the rest.
-  TensorDescriptor bdesc{grad_bias->expand({1, grad_bias->size(0)}),
-                         static_cast<size_t>(grad_output->dim())};
-  TensorDescriptor odesc{*grad_output};
-
-  auto handle = getCudnnHandle();
-  auto dataType = getCudnnDataType(*grad_bias);
-  Constant one(dataType, 1);
-  Constant zero(dataType, 0);
-
-  CUDNN_CHECK(cudnnConvolutionBackwardBias(handle, &one, odesc.desc(), grad_output->data_ptr(),
-                                                   &zero, bdesc.desc(), grad_bias->data_ptr()));
-  return *grad_bias;
-}
-
-
-}}  // namespace
+}}  // namespace at::native
 
 #endif
+
+
+namespace at { namespace native {
+
+// TODO (@zasdfgbnm): this is here only for compatibility, remove this in the future
+Tensor cudnn_convolution_deprecated(
+    const at::Tensor& input, const at::Tensor& weight, const at::Tensor& bias /* optional */,
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation,
+    int64_t groups, bool benchmark, bool deterministic) {
+  auto output = at::cudnn_convolution(input, weight, padding, stride, dilation, groups, benchmark, deterministic);
+  if (bias.defined()) {
+    output = output + reshape_bias(input.dim(), bias);
+  }
+  return output;
+}
+
+// TODO (@zasdfgbnm): this is here only for compatibility, remove this in the future
+Tensor cudnn_convolution_deprecated2(
+    const Tensor& input_t, const Tensor& weight_t,
+    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation,
+    int64_t groups, bool benchmark, bool deterministic)
+{
+  return at::cudnn_convolution(input_t, weight_t, padding, stride, dilation, groups, benchmark, deterministic, at::globalContext().allowTF32CuDNN());
+}
+
+// TODO (@zasdfgbnm): this is here only for compatibility, remove this in the future
+Tensor cudnn_convolution_transpose_deprecated(
+    const Tensor& input, const Tensor& weight, const Tensor& bias /* optional */,
+    IntArrayRef padding, IntArrayRef output_padding, IntArrayRef stride, IntArrayRef dilation,
+    int64_t groups, bool benchmark, bool deterministic)
+{
+  auto output = at::cudnn_convolution_transpose(input, weight, padding, output_padding, stride, dilation, groups, benchmark, deterministic);
+  if (bias.defined()) {
+    output = output + reshape_bias(input.dim(), bias);
+  }
+  return output;
+}
+
+// TODO (@zasdfgbnm): this is here only for compatibility, remove this in the future
+Tensor cudnn_convolution_transpose_deprecated2(
+    const Tensor& input_t, const Tensor& weight_t,
+    IntArrayRef padding, IntArrayRef output_padding, IntArrayRef stride, IntArrayRef dilation,
+    int64_t groups, bool benchmark, bool deterministic)
+{
+    return at::cudnn_convolution_transpose(input_t, weight_t, padding, output_padding, stride, dilation, groups, benchmark, deterministic, at::globalContext().allowTF32CuDNN());
+}
+
+}}  // namespace at::native

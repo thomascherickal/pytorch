@@ -1,10 +1,5 @@
 #! /usr/bin/env python
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
-
 import onnx.backend
 
 import argparse
@@ -218,6 +213,7 @@ model_mapping = {
     'inception_v1': 'inception_v1',
     'inception_v2': 'inception_v2',
     'resnet50': 'resnet50',
+    'shufflenet': 'shufflenet',
     'squeezenet': 'squeezenet_old',
     #'vgg16': 'vgg16',
     'vgg19': 'vgg19',

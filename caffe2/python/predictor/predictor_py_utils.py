@@ -1,9 +1,9 @@
 ## @package predictor_py_utils
 # Module caffe2.python.predictor.predictor_py_utils
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
+
+
+
+
 
 from caffe2.python import core, scope
 
@@ -15,6 +15,7 @@ def create_predict_net(predictor_export_meta):
     # Construct a new net to clear the existing settings.
     net = core.Net(predictor_export_meta.predict_net.name or "predict")
     net.Proto().op.extend(predictor_export_meta.predict_net.op)
+    net.Proto().partition_info.extend(predictor_export_meta.predict_net.partition_info)
     net.Proto().external_input.extend(
         predictor_export_meta.inputs + predictor_export_meta.parameters)
     net.Proto().external_output.extend(predictor_export_meta.outputs)
@@ -97,6 +98,16 @@ def GetBlobs(meta_net_def, key):
     return blobs
 
 
+def GetBlobsByTypePrefix(meta_net_def, blob_type_prefix):
+    blob_map = {}
+    for b in meta_net_def.blobs:
+        if b.key.startswith(blob_type_prefix):
+            for blob in b.value:
+                if blob not in blob_map:
+                    blob_map[blob] = len(blob_map)
+    return sorted(blob_map, key=lambda blob: blob_map[blob])
+
+
 def GetNet(meta_net_def, key):
     return _ProtoMapGet(meta_net_def.nets, key)
 
@@ -118,6 +129,12 @@ def AddBlobs(meta_net_def, blob_name, blob_def):
     for blob in blob_def:
         blobs.append(blob)
 
+def ReplaceBlobs(meta_net_def, blob_name, blob_def):
+    blobs = _ProtoMapGet(meta_net_def.blobs, blob_name)
+    assert blobs is not None, "The blob_name:{} does not exist".format(blob_name)
+    del blobs[:]
+    for blob in blob_def:
+        blobs.append(blob)
 
 def AddPlan(meta_net_def, plan_name, plan_def):
     meta_net_def.plans.add(key=plan_name, value=plan_def)
@@ -126,6 +143,27 @@ def AddPlan(meta_net_def, plan_name, plan_def):
 def AddNet(meta_net_def, net_name, net_def):
     meta_net_def.nets.add(key=net_name, value=net_def)
 
+
+def SetBlobsOrder(meta_net_def, blobs_order):
+    for blob in blobs_order:
+        meta_net_def.blobsOrder.append(blob)
+
+def SetPreLoadBlobs(meta_net_def, pre_load_blobs):
+    for blob in pre_load_blobs:
+        meta_net_def.preLoadBlobs.append(blob)
+
+def SetRequestOnlyEmbeddings(meta_net_def, request_only_embeddings):
+    for blob in request_only_embeddings:
+        meta_net_def.requestOnlyEmbeddings.append(blob)
+
+def GetBlobsOrder(meta_net_def):
+    return meta_net_def.blobsOrder
+
+def SetTensorBoundShapes(meta_net_def, tensor_bound_shapes):
+    meta_net_def.tensorBoundShapes.CopyFrom(tensor_bound_shapes)
+
+def SetAOTConfig(meta_net_def, aot_config):
+    meta_net_def.aotConfig.CopyFrom(aot_config)
 
 def GetArgumentByName(net_def, arg_name):
     for arg in net_def.arg:

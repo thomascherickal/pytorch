@@ -1,21 +1,24 @@
-## @package utils
+# @package utils
 # Module caffe2.python.utils
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
+
+
+
+
 
 from caffe2.proto import caffe2_pb2
+from caffe2.python.compatibility import container_abcs
 from future.utils import viewitems
 from google.protobuf.message import DecodeError, Message
 from google.protobuf import text_format
 
 import sys
 import copy
-import collections
 import functools
 import numpy as np
-from six import integer_types, binary_type, text_type
+from six import integer_types, binary_type, text_type, string_types
+
+OPTIMIZER_ITERATION_NAME = "optimizer_iteration"
+ITERATION_MUTEX_NAME = "iteration_mutex"
 
 
 def OpAlmostEqual(op_a, op_b, ignore_fields=None):
@@ -38,7 +41,7 @@ def OpAlmostEqual(op_a, op_b, ignore_fields=None):
 
     op_a = clean_op(op_a)
     op_b = clean_op(op_b)
-    return op_a == op_b
+    return op_a == op_b or str(op_a) == str(op_b)
 
 
 def CaffeBlobToNumpyArray(blob):
@@ -59,6 +62,9 @@ def Caffe2TensorToNumpyArray(tensor):
     elif tensor.data_type == caffe2_pb2.TensorProto.DOUBLE:
         return np.asarray(
             tensor.double_data, dtype=np.float64).reshape(tensor.dims)
+    elif tensor.data_type == caffe2_pb2.TensorProto.INT64:
+        return np.asarray(
+            tensor.int64_data, dtype=np.int64).reshape(tensor.dims)
     elif tensor.data_type == caffe2_pb2.TensorProto.INT32:
         return np.asarray(
             tensor.int32_data, dtype=np.int).reshape(tensor.dims)   # pb.INT32=>np.int use int32_data
@@ -91,6 +97,9 @@ def NumpyArrayToCaffe2Tensor(arr, name=None):
     elif arr.dtype == np.float64:
         tensor.data_type = caffe2_pb2.TensorProto.DOUBLE
         tensor.double_data.extend(list(arr.flatten().astype(np.float64)))
+    elif arr.dtype == np.int64:
+        tensor.data_type = caffe2_pb2.TensorProto.INT64
+        tensor.int64_data.extend(list(arr.flatten().astype(np.int64)))
     elif arr.dtype == np.int or arr.dtype == np.int32:
         tensor.data_type = caffe2_pb2.TensorProto.INT32
         tensor.int32_data.extend(arr.flatten().astype(np.int).tolist())
@@ -107,7 +116,7 @@ def NumpyArrayToCaffe2Tensor(arr, name=None):
         tensor.data_type = caffe2_pb2.TensorProto.UINT8
         tensor.int32_data.extend(list(arr.flatten().astype(np.uint8)))   # np.uint8=>pb.UNIT8 use int32_data
     else:
-        # TODO: complete the data type: bool, float16, byte, int64, string
+        # TODO: complete the data type: bool, float16, byte, string
         raise RuntimeError(
             "Numpy data type not supported yet: " + str(arr.dtype))
     return tensor
@@ -117,7 +126,7 @@ def MakeArgument(key, value):
     """Makes an argument based on the value type."""
     argument = caffe2_pb2.Argument()
     argument.name = key
-    iterable = isinstance(value, collections.Iterable)
+    iterable = isinstance(value, container_abcs.Iterable)
 
     # Fast tracking common use case where a float32 array of tensor parameters
     # needs to be serialized.  The entire array is guaranteed to have the same
@@ -202,7 +211,7 @@ def TryReadProtoWithClass(cls, s):
     try:
         text_format.Parse(s, obj)
         return obj
-    except text_format.ParseError:
+    except (text_format.ParseError, UnicodeDecodeError):
         obj.ParseFromString(s)
         return obj
 
@@ -228,13 +237,14 @@ def GetContentFromProtoString(s, function_map):
 
 def ConvertProtoToBinary(proto_class, filename, out_filename):
     """Convert a text file of the given protobuf class to binary."""
-    proto = TryReadProtoWithClass(proto_class, open(filename).read())
+    with open(filename) as f:
+        proto = TryReadProtoWithClass(proto_class, f.read())
     with open(out_filename, 'w') as fid:
         fid.write(proto.SerializeToString())
 
 
 def GetGPUMemoryUsageStats():
-    """Get GPU memory usage stats from CUDAContext. This requires flag
+    """Get GPU memory usage stats from CUDAContext/HIPContext. This requires flag
        --caffe2_gpu_memory_tracking to be enabled"""
     from caffe2.python import workspace, core
     workspace.RunOperatorOnce(
@@ -242,7 +252,7 @@ def GetGPUMemoryUsageStats():
             "GetGPUMemoryUsage",
             [],
             ["____mem____"],
-            device_option=core.DeviceOption(caffe2_pb2.CUDA, 0),
+            device_option=core.DeviceOption(workspace.GpuDeviceType, 0),
         ),
     )
     b = workspace.FetchBlob("____mem____")
@@ -326,3 +336,94 @@ def debug(f):
         return DebugMode.run(func)
 
     return wrapper
+
+
+def BuildUniqueMutexIter(
+    init_net,
+    net,
+    iter=None,
+    iter_mutex=None,
+    iter_val=0
+):
+    '''
+    Often, a mutex guarded iteration counter is needed. This function creates a
+    mutex iter in the net uniquely (if the iter already existing, it does
+    nothing)
+
+    This function returns the iter blob
+    '''
+    iter = iter if iter is not None else OPTIMIZER_ITERATION_NAME
+    iter_mutex = iter_mutex if iter_mutex is not None else ITERATION_MUTEX_NAME
+    from caffe2.python import core
+    if not init_net.BlobIsDefined(iter):
+        # Add training operators.
+        with core.DeviceScope(
+                core.DeviceOption(caffe2_pb2.CPU,
+                                  extra_info=["device_type_override:cpu"])
+        ):
+            iteration = init_net.ConstantFill(
+                [],
+                iter,
+                shape=[1],
+                value=iter_val,
+                dtype=core.DataType.INT64,
+            )
+            iter_mutex = init_net.CreateMutex([], [iter_mutex])
+            net.AtomicIter([iter_mutex, iteration], [iteration])
+    else:
+        iteration = init_net.GetBlobRef(iter)
+    return iteration
+
+
+def EnumClassKeyVals(cls):
+    # cls can only be derived from object
+    assert type(cls) == type
+    # Enum attribute keys are all capitalized and values are strings
+    enum = {}
+    for k in dir(cls):
+        if k == k.upper():
+            v = getattr(cls, k)
+            if isinstance(v, string_types):
+                assert v not in enum.values(), (
+                    "Failed to resolve {} as Enum: "
+                    "duplicate entries {}={}, {}={}".format(
+                        cls, k, v, [key for key in enum if enum[key] == v][0], v
+                    )
+                )
+                enum[k] = v
+    return enum
+
+
+def ArgsToDict(args):
+    """
+    Convert a list of arguments to a name, value dictionary. Assumes that
+    each argument has a name. Otherwise, the argument is skipped.
+    """
+    ans = {}
+    for arg in args:
+        if not arg.HasField("name"):
+            continue
+        for d in arg.DESCRIPTOR.fields:
+            if d.name == "name":
+                continue
+            if d.label == d.LABEL_OPTIONAL and arg.HasField(d.name):
+                ans[arg.name] = getattr(arg, d.name)
+                break
+            elif d.label == d.LABEL_REPEATED:
+                list_ = getattr(arg, d.name)
+                if len(list_) > 0:
+                    ans[arg.name] = list_
+                    break
+        else:
+            ans[arg.name] = None
+    return ans
+
+
+def NHWC2NCHW(tensor):
+    assert tensor.ndim >= 1
+    return tensor.transpose((0, tensor.ndim - 1) + tuple(range(1, tensor.ndim - 1)))
+
+
+def NCHW2NHWC(tensor):
+    assert tensor.ndim >= 2
+    return tensor.transpose((0,) + tuple(range(2, tensor.ndim)) + (1,))

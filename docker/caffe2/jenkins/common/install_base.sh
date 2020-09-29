@@ -30,6 +30,7 @@ install_ubuntu() {
   apt-get update
   apt-get install -y --no-install-recommends \
           autoconf \
+          apt-transport-https \
           build-essential \
           ca-certificates \
           cmake \
@@ -43,7 +44,8 @@ install_ubuntu() {
           libopencv-dev \
           libpthread-stubs0-dev \
           libsnappy-dev \
-          sudo
+          sudo \
+          vim
 
   # Ubuntu 14.04 ships with protobuf 2.5, but ONNX needs protobuf >= 2.6
   # so we install that here if on 14.04

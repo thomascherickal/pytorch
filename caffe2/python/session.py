@@ -1,9 +1,9 @@
 ## @package session
 # Module caffe2.python.session
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
+
+
+
+
 
 
 from caffe2.python import core, workspace
@@ -57,7 +57,7 @@ class Session(object):
 
 
     Global Workspace:
-        At the beggining of the session, a global workspace is created and kept
+        At the beginning of the session, a global workspace is created and kept
         alive for the duration of the session.
 
 

@@ -2,8 +2,12 @@ import torch
 import numbers
 from torch.nn.parameter import Parameter
 from .module import Module
-from .batchnorm import _BatchNorm
+from ._functions import CrossMapLRN2d as _cross_map_lrn2d
 from .. import functional as F
+from .. import init
+
+from torch import Tensor, Size
+from typing import Union, List
 
 
 class LocalResponseNorm(Module):
@@ -22,8 +26,8 @@ class LocalResponseNorm(Module):
         k: additive factor. Default: 1
 
     Shape:
-        - Input: :math:`(N, C, ...)`
-        - Output: :math:`(N, C, ...)` (same shape as input)
+        - Input: :math:`(N, C, *)`
+        - Output: :math:`(N, C, *)` (same shape as input)
 
     Examples::
 
@@ -34,15 +38,20 @@ class LocalResponseNorm(Module):
         >>> output_4d = lrn(signal_4d)
 
     """
+    __constants__ = ['size', 'alpha', 'beta', 'k']
+    size: int
+    alpha: float
+    beta: float
+    k: float
 
-    def __init__(self, size, alpha=1e-4, beta=0.75, k=1):
+    def __init__(self, size: int, alpha: float = 1e-4, beta: float = 0.75, k: float = 1.) -> None:
         super(LocalResponseNorm, self).__init__()
         self.size = size
         self.alpha = alpha
         self.beta = beta
         self.k = k
 
-    def forward(self, input):
+    def forward(self, input: Tensor) -> Tensor:
         return F.local_response_norm(input, self.size, self.alpha, self.beta,
                                      self.k)
 
@@ -51,33 +60,43 @@ class LocalResponseNorm(Module):
 
 
 class CrossMapLRN2d(Module):
+    size: int
+    alpha: float
+    beta: float
+    k: float
 
-    def __init__(self, size, alpha=1e-4, beta=0.75, k=1):
+    def __init__(self, size: int, alpha: float = 1e-4, beta: float = 0.75, k: float = 1) -> None:
         super(CrossMapLRN2d, self).__init__()
         self.size = size
         self.alpha = alpha
         self.beta = beta
         self.k = k
 
-    def forward(self, input):
-        return self._backend.CrossMapLRN2d(self.size, self.alpha, self.beta,
-                                           self.k)(input)
+    def forward(self, input: Tensor) -> Tensor:
+        return _cross_map_lrn2d.apply(input, self.size, self.alpha, self.beta,
+                                      self.k)
 
-    def extra_repr(self):
+    def extra_repr(self) -> str:
         return '{size}, alpha={alpha}, beta={beta}, k={k}'.format(**self.__dict__)
+
+
+_shape_t = Union[int, List[int], Size]
 
 
 class LayerNorm(Module):
     r"""Applies Layer Normalization over a mini-batch of inputs as described in
-    the paper `Layer Normalization`_ .
+    the paper `Layer Normalization <https://arxiv.org/abs/1607.06450>`__
 
     .. math::
-        y = \frac{x - \mathrm{E}[x]}{ \sqrt{\mathrm{Var}[x]} + \epsilon} * \gamma + \beta
+        y = \frac{x - \mathrm{E}[x]}{ \sqrt{\mathrm{Var}[x] + \epsilon}} * \gamma + \beta
 
     The mean and standard-deviation are calculated separately over the last
-    certain number dimensions with shape specified by :attr:`normalized_shape`.
+    certain number dimensions which have to be of the shape specified by
+    :attr:`normalized_shape`.
     :math:`\gamma` and :math:`\beta` are learnable affine transform parameters of
     :attr:`normalized_shape` if :attr:`elementwise_affine` is ``True``.
+    The standard-deviation is calculated via the biased estimator, equivalent to
+    `torch.var(input, unbiased=False)`.
 
     .. note::
         Unlike Batch Normalization and Instance Normalization, which applies
@@ -93,13 +112,15 @@ class LayerNorm(Module):
             of size
 
             .. math::
-                [* \times \text{normalized_shape}[0] \times \text{normalized_shape}[1]
-                    \times \ldots \times \text{normalized_shape}[-1]]
+                [* \times \text{normalized\_shape}[0] \times \text{normalized\_shape}[1]
+                    \times \ldots \times \text{normalized\_shape}[-1]]
+
             If a single integer is used, it is treated as a singleton list, and this module will
-            normalize over the last dimension with that specific size.
+            normalize over the last dimension which is expected to be of that specific size.
         eps: a value added to the denominator for numerical stability. Default: 1e-5
         elementwise_affine: a boolean value that when set to ``True``, this module
-            has learnable per-element affine parameters. Default: ``True``
+            has learnable per-element affine parameters initialized to ones (for weights)
+            and zeros (for biases). Default: ``True``.
 
     Shape:
         - Input: :math:`(N, *)`
@@ -118,14 +139,17 @@ class LayerNorm(Module):
         >>> m = nn.LayerNorm(10)
         >>> # Activating the module
         >>> output = m(input)
-
-    .. _`Layer Normalization`: https://arxiv.org/abs/1607.06450
     """
-    def __init__(self, normalized_shape, eps=1e-5, elementwise_affine=True):
+    __constants__ = ['normalized_shape', 'eps', 'elementwise_affine']
+    normalized_shape: _shape_t
+    eps: float
+    elementwise_affine: bool
+
+    def __init__(self, normalized_shape: _shape_t, eps: float = 1e-5, elementwise_affine: bool = True) -> None:
         super(LayerNorm, self).__init__()
         if isinstance(normalized_shape, numbers.Integral):
             normalized_shape = (normalized_shape,)
-        self.normalized_shape = torch.Size(normalized_shape)
+        self.normalized_shape = tuple(normalized_shape)
         self.eps = eps
         self.elementwise_affine = elementwise_affine
         if self.elementwise_affine:
@@ -136,32 +160,34 @@ class LayerNorm(Module):
             self.register_parameter('bias', None)
         self.reset_parameters()
 
-    def reset_parameters(self):
+    def reset_parameters(self) -> None:
         if self.elementwise_affine:
-            self.weight.data.fill_(1)
-            self.bias.data.zero_()
+            init.ones_(self.weight)
+            init.zeros_(self.bias)
 
-    def forward(self, input):
+    def forward(self, input: Tensor) -> Tensor:
         return F.layer_norm(
             input, self.normalized_shape, self.weight, self.bias, self.eps)
 
-    def extra_repr(self):
+    def extra_repr(self) -> Tensor:
         return '{normalized_shape}, eps={eps}, ' \
             'elementwise_affine={elementwise_affine}'.format(**self.__dict__)
 
 
 class GroupNorm(Module):
     r"""Applies Group Normalization over a mini-batch of inputs as described in
-    the paper `Group Normalization`_ .
+    the paper `Group Normalization <https://arxiv.org/abs/1803.08494>`__
 
     .. math::
-        y = \frac{x - \mathrm{E}[x]}{ \sqrt{\mathrm{Var}[x]} + \epsilon} * \gamma + \beta
+        y = \frac{x - \mathrm{E}[x]}{ \sqrt{\mathrm{Var}[x] + \epsilon}} * \gamma + \beta
 
     The input channels are separated into :attr:`num_groups` groups, each containing
     ``num_channels / num_groups`` channels. The mean and standard-deviation are calculated
     separately over the each group. :math:`\gamma` and :math:`\beta` are learnable
-    per-channel affine transform parameter vectorss of size :attr:`num_channels` if
+    per-channel affine transform parameter vectors of size :attr:`num_channels` if
     :attr:`affine` is ``True``.
+    The standard-deviation is calculated via the biased estimator, equivalent to
+    `torch.var(input, unbiased=False)`.
 
     This layer uses statistics computed from input data in both training and
     evaluation modes.
@@ -171,11 +197,12 @@ class GroupNorm(Module):
         num_channels (int): number of channels expected in input
         eps: a value added to the denominator for numerical stability. Default: 1e-5
         affine: a boolean value that when set to ``True``, this module
-            has learnable per-channel affine parameters. Default: ``True``
+            has learnable per-channel affine parameters initialized to ones (for weights)
+            and zeros (for biases). Default: ``True``.
 
     Shape:
-        - Input: :math:`(N, num\_channels, *)`
-        - Output: :math:`(N, num\_channels, *)` (same shape as input)
+        - Input: :math:`(N, C, *)` where :math:`C=\text{num\_channels}`
+        - Output: :math:`(N, C, *)` (same shape as input)
 
     Examples::
 
@@ -188,10 +215,14 @@ class GroupNorm(Module):
         >>> m = nn.GroupNorm(1, 6)
         >>> # Activating the module
         >>> output = m(input)
-
-    .. _`Group Normalization`: https://arxiv.org/abs/1803.08494
     """
-    def __init__(self, num_groups, num_channels, eps=1e-5, affine=True):
+    __constants__ = ['num_groups', 'num_channels', 'eps', 'affine']
+    num_groups: int
+    num_channels: int
+    eps: float
+    affine: bool
+
+    def __init__(self, num_groups: int, num_channels: int, eps: float = 1e-5, affine: bool = True) -> None:
         super(GroupNorm, self).__init__()
         self.num_groups = num_groups
         self.num_channels = num_channels
@@ -205,16 +236,16 @@ class GroupNorm(Module):
             self.register_parameter('bias', None)
         self.reset_parameters()
 
-    def reset_parameters(self):
+    def reset_parameters(self) -> None:
         if self.affine:
-            self.weight.data.fill_(1)
-            self.bias.data.zero_()
+            init.ones_(self.weight)
+            init.zeros_(self.bias)
 
-    def forward(self, input):
+    def forward(self, input: Tensor) -> Tensor:
         return F.group_norm(
             input, self.num_groups, self.weight, self.bias, self.eps)
 
-    def extra_repr(self):
+    def extra_repr(self) -> str:
         return '{num_groups}, {num_channels}, eps={eps}, ' \
             'affine={affine}'.format(**self.__dict__)
 

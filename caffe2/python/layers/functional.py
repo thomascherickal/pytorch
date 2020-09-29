@@ -1,9 +1,9 @@
 # @package functional
 # Module caffe2.python.layers.functional
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
+
+
+
+
 
 from caffe2.python import core, schema, scope, workspace
 from caffe2.python.layers.layers import (
@@ -21,12 +21,12 @@ logger.setLevel(logging.INFO)
 class Functional(ModelLayer):
 
     def __init__(self, model, input_record, output_names_or_num, function,
-                 name='functional', output_dtypes=None, **kwargs):
+                 name='functional', output_dtypes=None, tags=None, **kwargs):
 
         # allow coercion
         input_record = schema.as_record(input_record)
 
-        super(Functional, self).__init__(model, name, input_record, **kwargs)
+        super(Functional, self).__init__(model, name, input_record, tags=tags, **kwargs)
         self._function = function
         self._kwargs = kwargs
         return_struct = (
@@ -90,7 +90,7 @@ class Functional(ModelLayer):
                 elif shapes[blob][0] == 0:
                     shape = tuple(shapes[blob][1:])
                 else:
-                    logger.warning("unexpeced shape: {}".format(shapes[blob]))
+                    logger.warning("unexpected shape: {}".format(shapes[blob]))
                     # If batch dimension is not first - give up on shape
                     # inference for that blob
                     had_issues = True

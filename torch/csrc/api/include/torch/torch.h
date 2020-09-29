@@ -1,7 +1,8 @@
 #pragma once
 
-#include <torch/nn/module.h>
-#include <torch/nn/modules/modules.h>
+#include <torch/all.h>
 
-#include "torch/optimizers.h"
-#include "torch/serialization.h"
+#ifdef TORCH_API_INCLUDE_EXTENSION_H
+#include <torch/extension.h>
+
+#endif // defined(TORCH_API_INCLUDE_EXTENSION_H)

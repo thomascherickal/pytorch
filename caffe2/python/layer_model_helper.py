@@ -1,11 +1,11 @@
-## @package layer_model_helper
+# @package layer_model_helper
 # Module caffe2.python.layer_model_helper
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
 
-from caffe2.python import core, model_helper, schema, scope, utils
+
+
+
+
+from caffe2.python import core, model_helper, schema, scope, utils, muji
 from caffe2.python.modeling.parameter_info import (
     ParameterInfo,
 )
@@ -14,8 +14,8 @@ from caffe2.python.modeling.parameter_sharing import (
 )
 from caffe2.python.modeling.net_modifier import NetModifier
 
-from caffe2.python.optimizer import get_param_device
-from caffe2.python.regularizer import Regularizer
+from caffe2.python.optimizer import get_param_device, Optimizer
+from caffe2.python.regularizer import Regularizer, RegularizationBy
 from caffe2.python.layers import layers
 from caffe2.proto import caffe2_pb2
 from future.utils import viewitems, viewvalues
@@ -40,8 +40,14 @@ class LayerModelHelper(model_helper.ModelHelper):
     """
 
     def __init__(self, name, input_feature_schema, trainer_extra_schema,
-                 keep_blobs=False):
+                 keep_blobs=False,
+                 use_attribution=True):
         ''' TODO(amalevich): more documnetation on input args
+
+        use_attribution:
+            if True, will generate the atrribution net for feature importance
+            calculation; Need to turn it to false when FC is quantized as FP16
+            This attribute access will be consistent with MTML model.
         '''
 
         super(LayerModelHelper, self).__init__(name=name)
@@ -70,7 +76,7 @@ class LayerModelHelper(model_helper.ModelHelper):
         self._breakdown_map = None
 
         # Connect Schema to self.net. That particular instance of schmea will be
-        # use for generation of the Layers accross the network and would be used
+        # use for generation of the Layers across the network and would be used
         # for connection with Readers.
         self._input_feature_schema = schema.NewRecord(
             self.net,
@@ -88,9 +94,13 @@ class LayerModelHelper(model_helper.ModelHelper):
         self.param_init_net = self.create_init_net('param_init_net')
         self._initialize_params = True
 
+        self._transfer_learning_blob_name_mappings = None
+
         # additional (hard-coded) diagnose_options to report based on the model
         # TODO(xlwang): it's hack!
         self.ad_hoc_diagnose_blobs_and_operations = []
+        self.ad_hoc_plot_blobs = []
+        self.use_attribution = use_attribution
 
     def clear_output_schema(self):
         self._output_schema = None
@@ -104,6 +114,22 @@ class LayerModelHelper(model_helper.ModelHelper):
         self._metrics_schema = self._metrics_schema + schema.Struct(
             (name, value)
         )
+
+    # an empty white_set will skip everything
+    def filter_metrics_schema(self, white_set):
+        logger.info("Filter metric schema with white_set {}".format(white_set))
+        field_names = self._metrics_schema.field_names()
+        for name in field_names:
+            if name not in white_set:
+                self._metrics_schema = self._metrics_schema - schema.Struct((name, schema.Scalar()))
+
+    def add_ad_hoc_plot_blob(self, blob, dtype=None):
+        assert isinstance(
+            blob, (six.string_types, core.BlobReference)
+        ), "expect type str or BlobReference, but got {}".format(type(blob))
+        dtype = dtype or (np.float, (1, ))
+        self.add_metric_field(str(blob), schema.Scalar(dtype, blob))
+        self.ad_hoc_plot_blobs.append(blob)
 
     @staticmethod
     def _get_global_constant_initializer_op(
@@ -193,6 +219,7 @@ class LayerModelHelper(model_helper.ModelHelper):
         self.global_constants = {}
         self.global_constant_initializers = {}
         self.add_global_constant('ONE', 1.0)
+        self.add_global_constant('NAN', float("NaN"))
         self.add_global_constant('ZERO', 0.0)
         self.add_global_constant('ZERO_RANGE', [0, 0], dtype='int32')
 
@@ -219,6 +246,66 @@ class LayerModelHelper(model_helper.ModelHelper):
                     scope.CurrentNameScope(), param_name, ref_shape, shape)
             )
 
+    def _validate_param_optim(self, param_name, optim):
+        # there are three possible values for optim:
+        # 1) None (which will use self._default_optimizer after this layer is instantiated)
+        # 2) self.NoOptim
+        # 3) an instance of Optimizer class such as AdagradOptimizer
+
+        # this implies this parameter is not shared with any other parameter so far
+        if param_name not in self.param_to_optim:
+            return
+
+        logger.info("{} shares the same parameter with another parameter. "
+                    "Validating if the same optimizer has been specified for them.".format(
+                        param_name,
+                    ))
+
+        ref_optim = self.param_to_optim[param_name]
+
+        if optim is None:
+            assert ref_optim == self._default_optimizer, (
+                "Optim for {} is None which will fall back to use default_optimizer. "
+                "However, the optimizer that has been specified for this shared parameter "
+                "is {} which is different from default_optimizer {}. "
+                "Please check the optimizers specified for parameters shared "
+                "with {} and the default_optimizer to ensure the consistency.".format(
+                    param_name, ref_optim, self._default_optimizer, param_name
+                )
+            )
+        elif optim == self.NoOptim:
+            assert ref_optim == self.NoOptim, (
+                "Optim for {} is NoOptim. However, the optimizer for the parameters "
+                "shared with {} is {} which is different from NoOptim. "
+                "Please check the optimizer specified for other parameters in the "
+                "shared group to ensure consistency.".format(
+                    param_name, param_name, ref_optim
+                )
+            )
+        elif isinstance(optim, Optimizer):
+            assert isinstance(ref_optim, Optimizer), (
+                "Optim for {} is an instance of Optimizer. However, the optimizer "
+                "for the parameters shared with {} is {} which is not an instance "
+                "of Optimizer. Please check the optimizer specified for other "
+                " parameters in the shared group to ensure consistency.".format(
+                    param_name, param_name, ref_optim, optim
+                )
+            )
+
+            assert type(optim) is type(ref_optim) and optim.attributes == ref_optim.attributes, (
+                "Optim for {} is an instance of Optimizer. However, the optimizer "
+                "for the parameters shared with {} is {}. "
+                "This optimizer either doesn't have the same type as the current optimizer: "
+                "{} vs {}, or its attributes such as learning rate are different from "
+                "that of current optimizer which is {} vs {}. "
+                "Please check the optimizer specified for other parameters in the "
+                "shared group to ensure consistency.".format(
+                    param_name, param_name, ref_optim, type(optim), type(ref_optim), optim.attributes, ref_optim.attributes
+                )
+            )
+        else:
+            raise ValueError("optim should be either None, NoOptim, or an instance of Optimizer, Got {} ".format(optim))
+
     def create_param(self, param_name, shape, initializer, optimizer=None,
                      ps_param=None, regularizer=None):
         if isinstance(param_name, core.BlobReference):
@@ -229,7 +316,7 @@ class LayerModelHelper(model_helper.ModelHelper):
             param_name = parameter_sharing_context.get_parameter_name(
                 param_name)
         else:
-            raise "Unsupported type for param_name"
+            raise ValueError("Unsupported type for param_name")
 
         param_blob = core.BlobReference(param_name)
 
@@ -261,6 +348,8 @@ class LayerModelHelper(model_helper.ModelHelper):
 
         self._validate_param_shape(param_name, shape)
 
+        self._validate_param_optim(param_name, optimizer)
+
         self._param_to_shape[param_name] = shape
 
         return param
@@ -286,6 +375,7 @@ class LayerModelHelper(model_helper.ModelHelper):
 
             self.params.append(param.parameter)
             if isinstance(param, layers.LayerParameter):
+                logger.info("Add parameter regularizer {0}".format(param.parameter))
                 self.param_to_reg[param.parameter] = param.regularizer
             elif isinstance(param, ParameterInfo):
                 # TODO:
@@ -404,6 +494,15 @@ class LayerModelHelper(model_helper.ModelHelper):
         self._prediction.append((prediction, weight))
 
     @property
+    def transfer_learning_blob_name_mappings(self):
+        return self._transfer_learning_blob_name_mappings
+
+    @transfer_learning_blob_name_mappings.setter
+    def transfer_learning_blob_name_mappings(self, blob_name_mappings):
+        assert blob_name_mappings is not None, "Transfer learning blob name mappings should not be None"
+        self._transfer_learning_blob_name_mappings = blob_name_mappings
+
+    @property
     def loss(self):
         assert self._loss is not None
         return self._loss
@@ -494,6 +593,7 @@ class LayerModelHelper(model_helper.ModelHelper):
             # single layer. To enforce using an op (e.g. Split) as functional
             # layer, one can call 'model.FunctionalLayerSplit'
             layer = resolve_functional_layer(layer)
+
             def wrapper(*args, **kwargs):
                 def apply_operator(net, in_record, out_record, **kwargs):
                     # TODO(amalevich): Switch to net.operator as soon as it gets
@@ -519,7 +619,8 @@ class LayerModelHelper(model_helper.ModelHelper):
                 return self.add_layer(new_layer)
             return wrapper
         else:
-            raise ValueError(
+            # this needs to be an AttributeError to fit hasattr semantics
+            raise AttributeError(
                 "Trying to create non-registered layer: {}".format(layer))
 
     @property
@@ -532,15 +633,20 @@ class LayerModelHelper(model_helper.ModelHelper):
         train_init_net,
         blob_to_device=None,
     ):
+        logger.info("apply regularizer on loss")
         for param, regularizer in viewitems(self.param_to_reg):
-            if regularizer is None or regularizer.apply_after_optimizer:
+            if regularizer is None:
                 continue
+            logger.info("add regularizer {0} for param {1} to loss".format(regularizer, param))
             assert isinstance(regularizer, Regularizer)
-            added_loss_blob = regularizer(train_net, train_init_net, param)
-            self.add_loss(
-                schema.Scalar(blob=added_loss_blob),
-                str(added_loss_blob)
-            )
+            added_loss_blob = regularizer(train_net, train_init_net, param, grad=None,
+                                          by=RegularizationBy.ON_LOSS)
+            logger.info(added_loss_blob)
+            if added_loss_blob is not None:
+                self.add_loss(
+                    schema.Scalar(blob=added_loss_blob),
+                    str(added_loss_blob)
+                )
 
     def apply_regularizers_after_optimizer(
         self,
@@ -549,12 +655,26 @@ class LayerModelHelper(model_helper.ModelHelper):
         grad_map,
         blob_to_device=None,
     ):
+        logger.info("apply regularizer after optimizer")
+        CPU = muji.OnCPU()
+        # if given, blob_to_device is a map from blob to device_option
+        blob_to_device = blob_to_device or {}
         for param, regularizer in viewitems(self.param_to_reg):
-            if regularizer is None or not regularizer.apply_after_optimizer:
+            if regularizer is None:
                 continue
             assert isinstance(regularizer, Regularizer)
-            regularizer(
-                train_net, train_init_net, param, grad_map.get(str(param)))
+            logger.info("add regularizer {0} for param {1} to optimizer".format(regularizer, param))
+            device = get_param_device(
+                param,
+                grad_map.get(str(param)),
+                param_to_device=blob_to_device,
+                default_device=CPU,
+            )
+            with core.DeviceScope(device):
+                regularizer(
+                    train_net, train_init_net, param, grad=grad_map.get(str(param)),
+                    by=RegularizationBy.AFTER_OPTIMIZER
+                )
 
     def apply_post_grad_net_modifiers(
         self,
@@ -565,7 +685,7 @@ class LayerModelHelper(model_helper.ModelHelper):
         modify_output_record=False,
     ):
         param_grad_map = {param: grad_map[param]
-            for param in self.param_to_optim.keys() if param in grad_map}
+                          for param in self.param_to_optim.keys() if param in grad_map}
 
         for modifier in self._post_grad_net_modifiers:
             modifier(trainer_net, trainer_init_net, param_grad_map,
@@ -592,7 +712,7 @@ class LayerModelHelper(model_helper.ModelHelper):
         grad_map,
         blob_to_device=None,
     ):
-        CPU = core.DeviceOption(caffe2_pb2.CPU)
+        CPU = muji.OnCPU()
         # if given, blob_to_device is a map from blob to device_option
         blob_to_device = blob_to_device or {}
         for param, optimizer in viewitems(self.param_to_optim):
@@ -606,6 +726,10 @@ class LayerModelHelper(model_helper.ModelHelper):
                 param_to_device=blob_to_device,
                 default_device=CPU,
             )
+            if device is not None:
+                # extra info is not applicable for optimizers
+                del device.extra_info[:]
+
             with core.DeviceScope(device):
                 optimizer(
                     train_net, train_init_net, param, grad_map.get(str(param)))
@@ -627,5 +751,5 @@ class LayerModelHelper(model_helper.ModelHelper):
         # and change the assertion accordingly
         assert isinstance(breakdown_map, dict)
         assert all(isinstance(k, six.string_types) for k in breakdown_map)
-        assert sorted(list(breakdown_map.values())) == range(len(breakdown_map))
+        assert sorted(breakdown_map.values()) == list(range(len(breakdown_map)))
         self._breakdown_map = breakdown_map

@@ -1,9 +1,9 @@
 ## @package position_weighted
 # Module caffe2.python.layers.position_weighted
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
+
+
+
+
 
 import logging
 import numpy as np
@@ -49,7 +49,6 @@ class PositionWeighted(ModelLayer):
         )
 
         self.tags.update({Tags.HANDLE_AS_SPARSE_LAYER})
-        self.tags.update({Tags.GRADIENT_FROM_PS})
 
     def get_memory_usage(self):
         return self.shape

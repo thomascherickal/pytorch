@@ -1,94 +1,84 @@
-#include <catch.hpp>
+#include <gtest/gtest.h>
 
-#include <torch/expanding_array.h>
 #include <torch/torch.h>
 
-using namespace torch;
-using namespace torch::nn;
+#include <test/cpp/api/support.h>
 
-using Catch::StartsWith;
+#include <functional>
 
-TEST_CASE("misc") {
-  SECTION("no_grad") {
-    no_grad_guard guard;
-    auto model = Linear(5, 2).build();
-    auto x = Var(at::CPU(at::kFloat).randn({10, 5}), true);
-    auto y = model->forward({x})[0];
-    Variable s = y.sum();
+using namespace torch::test;
 
-    backward(s);
-    REQUIRE(!model->parameters()["weight"].grad().defined());
+void torch_warn_once_A() {
+  TORCH_WARN_ONCE("warn once");
+}
+
+void torch_warn_once_B() {
+  TORCH_WARN_ONCE("warn something else once");
+}
+
+void torch_warn() {
+  TORCH_WARN("warn multiple times");
+}
+
+TEST(UtilsTest, WarnOnce) {
+  {
+    WarningCapture warnings;
+
+    torch_warn_once_A();
+    torch_warn_once_A();
+    torch_warn_once_B();
+    torch_warn_once_B();
+
+    ASSERT_EQ(count_substr_occurrences(warnings.str(), "warn once"), 1);
+    ASSERT_EQ(
+        count_substr_occurrences(warnings.str(), "warn something else once"),
+        1);
   }
+  {
+    WarningCapture warnings;
 
-  SECTION("CPU random seed") {
-    int size = 100;
-    setSeed(7);
-    auto x1 = Var(at::CPU(at::kFloat).randn({size}));
-    setSeed(7);
-    auto x2 = Var(at::CPU(at::kFloat).randn({size}));
+    torch_warn();
+    torch_warn();
+    torch_warn();
 
-    auto l_inf = (x1.data() - x2.data()).abs().max().toCFloat();
-    REQUIRE(l_inf < 1e-10);
+    ASSERT_EQ(
+        count_substr_occurrences(warnings.str(), "warn multiple times"), 3);
   }
 }
 
-TEST_CASE("misc_cuda", "[cuda]") {
-  SECTION("CUDA random seed") {
-    int size = 100;
-    setSeed(7);
-    auto x1 = Var(at::CUDA(at::kFloat).randn({size}));
-    setSeed(7);
-    auto x2 = Var(at::CUDA(at::kFloat).randn({size}));
+TEST(NoGradTest, SetsGradModeCorrectly) {
+  torch::manual_seed(0);
+  torch::NoGradGuard guard;
+  torch::nn::Linear model(5, 2);
+  auto x = torch::randn({10, 5}, torch::requires_grad());
+  auto y = model->forward(x);
+  torch::Tensor s = y.sum();
 
-    auto l_inf = (x1.data() - x2.data()).abs().max().toCFloat();
-    REQUIRE(l_inf < 1e-10);
-  }
+  // Mimicking python API behavior:
+  ASSERT_THROWS_WITH(s.backward(),
+    "element 0 of tensors does not require grad and does not have a grad_fn")
 }
 
-TEST_CASE("expanding-array") {
-  SECTION("successful construction") {
-    SECTION("initializer_list") {
-      ExpandingArray<5> e({1, 2, 3, 4, 5});
-      REQUIRE(e.size() == 5);
-      for (size_t i = 0; i < e.size(); ++i) {
-        REQUIRE((*e)[i] == i + 1);
-      }
-    }
-
-    SECTION("vector") {
-      ExpandingArray<5> e(std::vector<int64_t>{1, 2, 3, 4, 5});
-      REQUIRE(e.size() == 5);
-      for (size_t i = 0; i < e.size(); ++i) {
-        REQUIRE((*e)[i] == i + 1);
-      }
-    }
-
-    SECTION("array") {
-      ExpandingArray<5> e(std::array<int64_t, 5>({1, 2, 3, 4, 5}));
-      REQUIRE(e.size() == 5);
-      for (size_t i = 0; i < e.size(); ++i) {
-        REQUIRE((*e)[i] == i + 1);
-      }
-    }
-
-    SECTION("single value") {
-      ExpandingArray<5> e(5);
-      REQUIRE(e.size() == 5);
-      for (size_t i = 0; i < e.size(); ++i) {
-        REQUIRE((*e)[i] == 5);
-      }
-    }
+struct AutogradTest : torch::test::SeedingFixture {
+  AutogradTest() {
+    x = torch::randn({3, 3}, torch::requires_grad());
+    y = torch::randn({3, 3});
+    z = x * y;
   }
-  SECTION("throws for incorrect size on construction") {
-    SECTION("initializer_list") {
-      REQUIRE_THROWS_WITH(
-          ExpandingArray<5>({1, 2, 3, 4, 5, 6, 7}),
-          StartsWith("Expected 5 values, but instead got 7"));
-    }
-    SECTION("vector") {
-      REQUIRE_THROWS_WITH(
-          ExpandingArray<5>(std::vector<int64_t>({1, 2, 3, 4, 5, 6, 7})),
-          StartsWith("Expected 5 values, but instead got 7"));
-    }
-  }
+  torch::Tensor x, y, z;
+};
+
+TEST_F(AutogradTest, CanTakeDerivatives) {
+  z.backward(torch::ones_like(z));
+  ASSERT_TRUE(x.grad().allclose(y));
+}
+
+TEST_F(AutogradTest, CanTakeDerivativesOfZeroDimTensors) {
+  z.sum().backward();
+  ASSERT_TRUE(x.grad().allclose(y));
+}
+
+TEST_F(AutogradTest, CanPassCustomGradientInputs) {
+  z.sum().backward(torch::ones({}) * 2);
+  ASSERT_TRUE(x.grad().allclose(y * 2));
 }

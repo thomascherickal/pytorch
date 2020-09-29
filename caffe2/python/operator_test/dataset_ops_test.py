@@ -1,7 +1,7 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
+
+
+
+
 import numpy as np
 from caffe2.python import core, workspace, dataset
 from caffe2.python.dataset import Const
@@ -172,30 +172,32 @@ class TestDatasetOps(TestCase):
 
         dataset_fields = schema.field_names()
 
-        net = core.Net('pack_unpack_net')
 
-        batch = NewRecord(net, contents)
-        FeedRecord(batch, contents)
+        for pack_to_single_shared_ptr in (True, False):
+            net = core.Net('pack_unpack_net')
+            batch = NewRecord(net, contents)
+            FeedRecord(batch, contents)
 
-        packed = net.PackRecords(
-            batch.field_blobs(), 1,
-            fields=dataset_fields
-        )
-
-        unpacked = packed.UnPackRecords(
-            [], len(dataset_fields),
-            fields=dataset_fields
-        )
-
-        workspace.RunNetOnce(net)
-
-        for initial_tensor, unpacked_tensor in zip(
-            batch.field_blobs(), unpacked
-        ):
-            npt.assert_array_equal(
-                workspace.FetchBlob(initial_tensor),
-                workspace.FetchBlob(unpacked_tensor)
+            packed = net.PackRecords(
+                batch.field_blobs(), 1,
+                fields=dataset_fields,
+                pack_to_single_shared_ptr=pack_to_single_shared_ptr
             )
+
+            unpacked = packed.UnPackRecords(
+                [], len(dataset_fields),
+                fields=dataset_fields
+            )
+
+            workspace.RunNetOnce(net)
+
+            for initial_tensor, unpacked_tensor in zip(
+                batch.field_blobs(), unpacked
+            ):
+                npt.assert_array_equal(
+                    workspace.FetchBlob(initial_tensor),
+                    workspace.FetchBlob(unpacked_tensor)
+                )
 
     def test_dataset_ops(self):
         """
@@ -239,7 +241,7 @@ class TestDatasetOps(TestCase):
         """
         This is what the flattened fields for this schema look like, along
         with its type. Each one of these fields will be stored, read and
-        writen as a tensor.
+        written as a tensor.
         """
         expected_fields = [
             ('dense', (np.float32, 3)),
@@ -270,7 +272,7 @@ class TestDatasetOps(TestCase):
 
         Contents as defined below could represent, for example, a log of
         search queries along with dense, sparse features and metadata.
-        The datset below has 3 top-level entries.
+        The dataset below has 3 top-level entries.
         """
         contents_raw = [
             # dense

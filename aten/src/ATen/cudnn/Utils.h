@@ -1,16 +1,12 @@
 #pragma once
 
 #include <ATen/ATen.h>
-#include "THC/THC.h"
-#include "cudnn-wrapper.h"
-#include "Handles.h"
+#include <ATen/cuda/Exceptions.h>
+#include <THC/THC.h>
+#include <ATen/cudnn/cudnn-wrapper.h>
+#include <ATen/cudnn/Handle.h>
 
 namespace at { namespace native {
-
-inline void setCuDNNStreamToCurrent() {
-  // TODO: Should getCurrentStream be a method on Context?
-  CUDNN_CHECK(cudnnSetStream(getCudnnHandle(), THCState_getCurrentStream(globalContext().getTHCState())));
-}
 
 // cuDNN has a buggy check for tensor being contiguous (that is, it does
 // not ignore stride for dimension that is equal to 0).  This function

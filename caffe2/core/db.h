@@ -3,9 +3,9 @@
 
 #include <mutex>
 
+#include "c10/util/Registry.h"
 #include "caffe2/core/blob_serialization.h"
-#include "caffe2/core/registry.h"
-#include "caffe2/proto/caffe2.pb.h"
+#include "caffe2/proto/caffe2_pb.h"
 
 namespace caffe2 {
 namespace db {
@@ -19,17 +19,19 @@ enum Mode { READ, WRITE, NEW };
 /**
  * An abstract class for the cursor of the database while reading.
  */
-class Cursor {
+class CAFFE2_API Cursor {
  public:
-  Cursor() { }
-  virtual ~Cursor() { }
+  Cursor() {}
+  virtual ~Cursor() {}
   /**
    * Seek to a specific key (or if the key does not exist, seek to the
    * immediate next). This is optional for dbs, and in default, SupportsSeek()
    * returns false meaning that the db cursor does not support it.
    */
   virtual void Seek(const string& key) = 0;
-  virtual bool SupportsSeek() { return false; }
+  virtual bool SupportsSeek() {
+    return false;
+  }
   /**
    * Seek to the first key in the database.
    */
@@ -52,16 +54,16 @@ class Cursor {
    */
   virtual bool Valid() = 0;
 
-  DISABLE_COPY_AND_ASSIGN(Cursor);
+  C10_DISABLE_COPY_AND_ASSIGN(Cursor);
 };
 
 /**
  * An abstract class for the current database transaction while writing.
  */
-class Transaction {
+class CAFFE2_API Transaction {
  public:
-  Transaction() { }
-  virtual ~Transaction() { }
+  Transaction() {}
+  virtual ~Transaction() {}
   /**
    * Puts the key value pair to the database.
    */
@@ -71,16 +73,16 @@ class Transaction {
    */
   virtual void Commit() = 0;
 
-  DISABLE_COPY_AND_ASSIGN(Transaction);
+  C10_DISABLE_COPY_AND_ASSIGN(Transaction);
 };
 
 /**
  * An abstract class for accessing a database of key-value pairs.
  */
-class DB {
+class CAFFE2_API DB {
  public:
   DB(const string& /*source*/, Mode mode) : mode_(mode) {}
-  virtual ~DB() { }
+  virtual ~DB() {}
   /**
    * Closes the database.
    */
@@ -99,14 +101,14 @@ class DB {
  protected:
   Mode mode_;
 
-  DISABLE_COPY_AND_ASSIGN(DB);
+  C10_DISABLE_COPY_AND_ASSIGN(DB);
 };
 
 // Database classes are registered by their names so we can do optional
 // dependencies.
-CAFFE_DECLARE_REGISTRY(Caffe2DBRegistry, DB, const string&, Mode);
+C10_DECLARE_REGISTRY(Caffe2DBRegistry, DB, const string&, Mode);
 #define REGISTER_CAFFE2_DB(name, ...) \
-  CAFFE_REGISTER_CLASS(Caffe2DBRegistry, name, __VA_ARGS__)
+  C10_REGISTER_CLASS(Caffe2DBRegistry, name, __VA_ARGS__)
 
 /**
  * Returns a database object of the given database type, source and mode. The
@@ -114,8 +116,8 @@ CAFFE_DECLARE_REGISTRY(Caffe2DBRegistry, DB, const string&, Mode);
  * supported, a nullptr is returned. The caller is responsible for examining the
  * validity of the pointer.
  */
-inline unique_ptr<DB> CreateDB(
-    const string& db_type, const string& source, Mode mode) {
+inline unique_ptr<DB>
+CreateDB(const string& db_type, const string& source, Mode mode) {
   auto result = Caffe2DBRegistry()->Create(db_type, source, mode);
   VLOG(1) << ((!result) ? "not found db " : "found db ") << db_type;
   return result;
@@ -141,9 +143,8 @@ inline bool DBExists(const string& db_type, const string& full_db_name) {
 /**
  * A reader wrapper for DB that also allows us to serialize it.
  */
-class DBReader {
+class CAFFE2_API DBReader {
  public:
-
   friend class DBReaderSerializer;
   DBReader() {}
 
@@ -158,7 +159,8 @@ class DBReader {
   explicit DBReader(const DBReaderProto& proto) {
     Open(proto.db_type(), proto.source());
     if (proto.has_key()) {
-      CAFFE_ENFORCE(cursor_->SupportsSeek(),
+      CAFFE_ENFORCE(
+          cursor_->SupportsSeek(),
           "Encountering a proto that needs seeking but the db type "
           "does not support it.");
       cursor_->Seek(proto.key());
@@ -187,7 +189,13 @@ class DBReader {
     db_type_ = db_type;
     source_ = source;
     db_ = CreateDB(db_type_, source_, READ);
-    CAFFE_ENFORCE(db_, "Cannot open db: ", source_, " of type ", db_type_);
+    CAFFE_ENFORCE(
+        db_,
+        "Cannot find db implementation of type ",
+        db_type,
+        " (while trying to open ",
+        source_,
+        ")");
     InitializeCursor(num_shards, shard_id);
   }
 
@@ -226,7 +234,7 @@ class DBReader {
     *value = cursor_->value();
 
     // In sharded mode, each read skips num_shards_ records
-    for (int s = 0; s < num_shards_; s++) {
+    for (uint32_t s = 0; s < num_shards_; s++) {
       cursor_->Next();
       if (!cursor_->Valid()) {
         MoveToBeginning();
@@ -252,8 +260,8 @@ class DBReader {
    * accessing the same cursor. You should consider using Read() explicitly.
    */
   inline Cursor* cursor() const {
-    LOG(ERROR) << "Usually for a DBReader you should use Read() to be "
-                  "thread safe. Consider refactoring your code.";
+    VLOG(1) << "Usually for a DBReader you should use Read() to be "
+               "thread safe. Consider refactoring your code.";
     return cursor_.get();
   }
 
@@ -270,10 +278,10 @@ class DBReader {
 
   void MoveToBeginning() const {
     cursor_->SeekToFirst();
-    for (auto s = 0; s < shard_id_; s++) {
+    for (uint32_t s = 0; s < shard_id_; s++) {
       cursor_->Next();
       CAFFE_ENFORCE(
-          cursor_->Valid(), "Db has less rows than shard id: ", s, shard_id_);
+          cursor_->Valid(), "Db has fewer rows than shard id: ", s, shard_id_);
     }
   }
 
@@ -282,30 +290,31 @@ class DBReader {
   unique_ptr<DB> db_;
   unique_ptr<Cursor> cursor_;
   mutable std::mutex reader_mutex_;
-  uint32_t num_shards_;
-  uint32_t shard_id_;
+  uint32_t num_shards_{};
+  uint32_t shard_id_{};
 
-  DISABLE_COPY_AND_ASSIGN(DBReader);
+  C10_DISABLE_COPY_AND_ASSIGN(DBReader);
 };
 
-class DBReaderSerializer : public BlobSerializerBase {
+class CAFFE2_API DBReaderSerializer : public BlobSerializerBase {
  public:
   /**
    * Serializes a DBReader. Note that this blob has to contain DBReader,
    * otherwise this function produces a fatal error.
    */
   void Serialize(
-      const Blob& blob,
+      const void* pointer,
+      TypeMeta typeMeta,
       const string& name,
       BlobSerializerBase::SerializationAcceptor acceptor) override;
 };
 
-class DBReaderDeserializer : public BlobDeserializerBase {
+class CAFFE2_API DBReaderDeserializer : public BlobDeserializerBase {
  public:
   void Deserialize(const BlobProto& proto, Blob* blob) override;
 };
 
-}  // namespace db
-}  // namespace caffe2
+} // namespace db
+} // namespace caffe2
 
-#endif  // CAFFE2_CORE_DB_H_
+#endif // CAFFE2_CORE_DB_H_

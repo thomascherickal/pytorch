@@ -1,10 +1,22 @@
-#include "StoreTestCommon.hpp"
-#include "FileStore.hpp"
+#include <c10d/test/StoreTestCommon.hpp>
 
+#ifndef _WIN32
 #include <unistd.h>
+#endif
+
 #include <iostream>
 #include <thread>
 
+#include <gtest/gtest.h>
+
+#include <c10d/FileStore.hpp>
+#include <c10d/PrefixStore.hpp>
+
+#ifdef _WIN32
+std::string tmppath() {
+  return c10d::test::autoGenerateTmpFilePath();
+}
+#else
 std::string tmppath() {
   const char* tmpdir = getenv("TMPDIR");
   if (tmpdir == nullptr) {
@@ -24,14 +36,13 @@ std::string tmppath() {
   close(fd);
   return std::string(tmp.data(), tmp.size());
 }
+#endif
 
-int main(int argc, char** argv) {
-  auto path = tmppath();
-  std::cout << "Using temporary file: " << path << std::endl;
-
-  // Basic set/get
+void testGetSet(std::string path, std::string prefix = "") {
+  // Basic Set/Get on File Store
   {
-    c10d::FileStore store(path);
+    auto fileStore = std::make_shared<c10d::FileStore>(path, 2);
+    c10d::PrefixStore store(prefix, fileStore);
     c10d::test::set(store, "key0", "value0");
     c10d::test::set(store, "key1", "value1");
     c10d::test::set(store, "key2", "value2");
@@ -42,25 +53,32 @@ int main(int argc, char** argv) {
 
   // Perform get on new instance
   {
-    c10d::FileStore store(path);
+    auto fileStore = std::make_shared<c10d::FileStore>(path, 2);
+    c10d::PrefixStore store(prefix, fileStore);
     c10d::test::check(store, "key0", "value0");
   }
+}
 
-  // Hammer on FileStore#add
-  std::vector<std::thread> threads;
+void stressTestStore(std::string path, std::string prefix = "") {
+  // Hammer on FileStore::add
   const auto numThreads = 4;
   const auto numIterations = 100;
+
+  std::vector<std::thread> threads;
   c10d::test::Semaphore sem1, sem2;
+
   for (auto i = 0; i < numThreads; i++) {
-    threads.push_back(std::move(std::thread([&] {
-            c10d::FileStore store(path);
-            sem1.post();
-            sem2.wait();
-            for (auto j = 0; j < numIterations; j++) {
-              store.add("counter", 1);
-            }
-          })));
+    threads.push_back(std::thread([&] {
+      auto fileStore = std::make_shared<c10d::FileStore>(path, numThreads + 1);
+      c10d::PrefixStore store(prefix, fileStore);
+      sem1.post();
+      sem2.wait();
+      for (auto j = 0; j < numIterations; j++) {
+        store.add("counter", 1);
+      }
+    }));
   }
+
   sem1.wait(numThreads);
   sem2.post(numThreads);
   for (auto& thread : threads) {
@@ -69,12 +87,38 @@ int main(int argc, char** argv) {
 
   // Check that the counter has the expected value
   {
-    c10d::FileStore store(path);
+    auto fileStore = std::make_shared<c10d::FileStore>(path, numThreads + 1);
+    c10d::PrefixStore store(prefix, fileStore);
     std::string expected = std::to_string(numThreads * numIterations);
     c10d::test::check(store, "counter", expected);
   }
+}
 
-  unlink(path.c_str());
-  std::cout << "Test succeeded" << std::endl;
-  return 0;
+class FileStoreTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    path_ = tmppath();
+  }
+
+  void TearDown() override {
+    unlink(path_.c_str());
+  }
+
+  std::string path_;
+};
+
+TEST_F(FileStoreTest, testGetAndSet) {
+  testGetSet(path_);
+}
+
+TEST_F(FileStoreTest, testGetAndSetWithPrefix) {
+  testGetSet(path_, "testPrefix");
+}
+
+TEST_F(FileStoreTest, testStressStore) {
+  stressTestStore(path_);
+}
+
+TEST_F(FileStoreTest, testStressStoreWithPrefix) {
+  stressTestStore(path_, "testPrefix");
 }

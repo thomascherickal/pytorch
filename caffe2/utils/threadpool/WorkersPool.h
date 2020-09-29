@@ -1,10 +1,11 @@
 #pragma once
 
+#include <atomic>
+#include <condition_variable>
+#include <thread>
+#include "c10/util/thread_name.h"
 #include "caffe2/core/common.h"
 #include "caffe2/core/logging.h"
-#include <atomic>
-#include <thread>
-#include <condition_variable>
 
 #if defined(_MSC_VER)
 #include <intrin.h>
@@ -52,7 +53,11 @@ struct AllocAligned {
   static void release(T* p) {
     if (p) {
       p->~T();
+#if defined(_MSC_VER)
+      _aligned_free((void*)p);
+#else
       free((void*)p);
+#endif
     }
   }
 };
@@ -226,7 +231,7 @@ class alignas(kGEMMLOWPCacheLineSize) Worker {
       : task_(nullptr),
         state_(State::ThreadStartup),
         counter_to_decrement_when_ready_(counter_to_decrement_when_ready) {
-    thread_ = caffe2::make_unique<std::thread>([this]() { this->ThreadFunc(); });
+    thread_ = std::make_unique<std::thread>([this]() { this->ThreadFunc(); });
   }
 
   ~Worker() {
@@ -262,6 +267,7 @@ class alignas(kGEMMLOWPCacheLineSize) Worker {
 
   // Thread entry point.
   void ThreadFunc() {
+    c10::setThreadName("CaffeWorkersPool");
     ChangeState(State::Ready);
 
     // Thread main loop
@@ -294,7 +300,7 @@ class alignas(kGEMMLOWPCacheLineSize) Worker {
     return nullptr;
   }
 
-  // Called by the master thead to give this worker work to do.
+  // Called by the master thread to give this worker work to do.
   // It is only legal to call this if the worker
   void StartWork(Task* task) {
     DCHECK(!task_.load());
@@ -331,9 +337,9 @@ class WorkersPool {
     // One of the tasks will be run on the current thread.
     int workers_count = tasks.size() - 1;
     CreateWorkers(workers_count);
-    DCHECK_LE(workers_count, workers_.size());
+    DCHECK_LE(workers_count, (int)workers_.size());
     counter_to_decrement_when_ready_.Reset(workers_count);
-    for (auto task = 1; task < tasks.size(); ++task) {
+    for (size_t task = 1; task < tasks.size(); ++task) {
       workers_[task - 1]->StartWork(tasks[task].get());
     }
     // Execute the remaining workload immediately on the current thread.
@@ -358,7 +364,7 @@ class WorkersPool {
     counter_to_decrement_when_ready_.Wait();
   }
 
-  DISABLE_COPY_AND_ASSIGN(WorkersPool);
+  C10_DISABLE_COPY_AND_ASSIGN(WorkersPool);
   std::vector<std::unique_ptr<Worker, AlignedDeleter<Worker>>> workers_;
   // The BlockingCounter used to wait for the workers.
   BlockingCounter counter_to_decrement_when_ready_;

@@ -3,7 +3,7 @@
 #include "caffe2/core/common.h"
 #include "caffe2/core/logging.h"
 #include "caffe2/core/net.h"
-#include "caffe2/proto/caffe2.pb.h"
+#include "caffe2/proto/caffe2_pb.h"
 
 namespace caffe2 {
 
@@ -150,7 +150,7 @@ bool PatternNetTransform::ReplaceRule(
   std::unordered_map<string, string> external_renaming;
 
   // Figure out blob renamings
-  for (int i = 0; i < match.size(); i++) {
+  for (auto i = 0U; i < match.size(); i++) {
     int g_idx = match[i];
     int p_idx = ordered_ops_[i];
     for (int j = 0; j < p_.node(p_idx).op.input().size(); j++) {
@@ -179,7 +179,7 @@ bool PatternNetTransform::ReplaceRule(
   g.resize_nodes(offset + r_.size());
 
   // Append all the new operators.
-  for (int i = 0; i < r_.size(); i++) {
+  for (auto i = 0U; i < r_.size(); i++) {
     int new_node_idx = offset + i;
 
     OperatorDef new_op = r_.node(i).op;

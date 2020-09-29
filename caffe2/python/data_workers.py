@@ -1,9 +1,9 @@
 ## @package data_workers
 # Module caffe2.python.data_workers
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
+
+
+
+
 
 
 '''
@@ -242,7 +242,7 @@ class BatchFeeder(State):
                 qsize = self._internal_queue.qsize()
                 if qsize < 2 and (time.time() - self._last_warning) > LOG_INT_SECS:
                     log.warning("Warning, data loading lagging behind: " +
-                                "name={}".format(qsize, self._input_source_name))
+                                "queue size={}, name={}".format(qsize, self._input_source_name))
                     self._last_warning = time.time()
                 self._counter += 1
                 self._internal_queue.put(chunk, block=True, timeout=0.5)

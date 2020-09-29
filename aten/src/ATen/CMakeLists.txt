@@ -1,575 +1,437 @@
-CMAKE_MINIMUM_REQUIRED(VERSION 2.8)
-SET(CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake ${CMAKE_MODULE_PATH})
+cmake_minimum_required(VERSION 3.0 FATAL_ERROR)
+set(CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake ${CMAKE_MODULE_PATH})
 
-IF(WITH_ROCM)
- INCLUDE_DIRECTORIES(${HIP_PATH}/include)
- INCLUDE_DIRECTORIES(${HIPBLAS_PATH}/include)
- INCLUDE_DIRECTORIES(${HIPSPARSE_PATH}/include)
- INCLUDE_DIRECTORIES(${HIPRNG_PATH}/include)
- INCLUDE_DIRECTORIES(${THRUST_PATH})
-
- # load HIP cmake module and load platform id
- EXECUTE_PROCESS(COMMAND ${HIP_PATH}/bin/hipconfig -P OUTPUT_VARIABLE PLATFORM)
- EXECUTE_PROCESS(COMMAND ${HIP_PATH}/bin/hipconfig --cpp_config OUTPUT_VARIABLE HIP_CXX_FLAGS)
-
- # Link with HIPCC https://github.com/ROCm-Developer-Tools/HIP/blob/master/docs/markdown/hip_porting_guide.md#linking-with-hipcc
- SET(CMAKE_CXX_LINK_EXECUTABLE ${HIP_HIPCC_EXECUTABLE})
-
- # Show message that we're using ROCm.
- MESSAGE(STATUS "ROCM TRUE:")
- MESSAGE(STATUS "CMAKE_CXX_COMPILER: " ${CMAKE_CXX_COMPILER})
-ENDIF(WITH_ROCM)
-
-# avoid some cmake warnings
-IF(POLICY CMP0026)
- CMAKE_POLICY(SET CMP0026 OLD)
-ENDIF()
-
-IF(MSVC AND NOT "${CMAKE_BUILD_TYPE}" MATCHES "Debug")
-  SET(MSVC_OPT_FLAG "/Ox /fp:strict ")
-  SET(VCOMP_LIB "vcomp")
-ELSE()
-  SET(MSVC_OPT_FLAG " ")
-  SET(VCOMP_LIB "vcompd")
-ENDIF()
-
-IF(NOT MSVC)
-  SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-ignored-qualifiers")
-  SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-ignored-qualifiers")
-  SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-absolute-value")
-  SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-absolute-value")
-ENDIF(NOT MSVC)
-
-########################
-# SET_SOURCE_FILES_PROPERTIES must be in the same CMakeLists.txt file as the target that includes the file
-# so we need to set these commands here rather than in src/TH
-IF(C_SSE4_1_FOUND AND C_SSE4_2_FOUND)
-  IF(MSVC)
-    SET_SOURCE_FILES_PROPERTIES(${CMAKE_CURRENT_SOURCE_DIR}/../TH/generic/simd/convolve5x5_sse.cpp PROPERTIES COMPILE_FLAGS "${MSVC_OPT_FLAG}/fp:fast")
-  ELSE(MSVC)
-    SET_SOURCE_FILES_PROPERTIES(${CMAKE_CURRENT_SOURCE_DIR}/../TH/generic/simd/convolve5x5_sse.cpp PROPERTIES COMPILE_FLAGS "-O3 -ffast-math")
-  ENDIF(MSVC)
-ENDIF(C_SSE4_1_FOUND AND C_SSE4_2_FOUND)
-IF(C_AVX_FOUND)
-  IF(MSVC)
-    SET_SOURCE_FILES_PROPERTIES(${CMAKE_CURRENT_SOURCE_DIR}/../TH/generic/simd/convolve5x5_avx.cpp PROPERTIES COMPILE_FLAGS "${MSVC_OPT_FLAG}/fp:fast ${CXX_AVX_FLAGS}")
-    SET_SOURCE_FILES_PROPERTIES(${CMAKE_CURRENT_SOURCE_DIR}/../TH/vector/AVX.cpp PROPERTIES COMPILE_FLAGS "${MSVC_OPT_FLAG}/arch:AVX ${CXX_AVX_FLAGS}")
-  ELSE(MSVC)
-    SET_SOURCE_FILES_PROPERTIES(${CMAKE_CURRENT_SOURCE_DIR}/../TH/generic/simd/convolve5x5_avx.cpp PROPERTIES COMPILE_FLAGS "-O3 -ffast-math ${CXX_AVX_FLAGS}")
-    SET_SOURCE_FILES_PROPERTIES(${CMAKE_CURRENT_SOURCE_DIR}/../TH/vector/AVX.cpp PROPERTIES COMPILE_FLAGS "-O3 ${CXX_AVX_FLAGS}")
-  ENDIF(MSVC)
-ENDIF(C_AVX_FOUND)
-
-IF(C_AVX2_FOUND)
-  IF(MSVC)
-    SET_SOURCE_FILES_PROPERTIES(${CMAKE_CURRENT_SOURCE_DIR}/../TH/vector/AVX2.cpp PROPERTIES COMPILE_FLAGS "${MSVC_OPT_FLAG}/arch:AVX2 ${CXX_AVX2_FLAGS}")
-  ELSE(MSVC)
-    SET_SOURCE_FILES_PROPERTIES(${CMAKE_CURRENT_SOURCE_DIR}/../TH/vector/AVX2.cpp PROPERTIES COMPILE_FLAGS "-O3 ${CXX_AVX2_FLAGS}")
-  ENDIF(MSVC)
-ENDIF(C_AVX2_FOUND)
-
-IF(NOT MSVC AND NOT "${CMAKE_C_COMPILER_ID}" MATCHES "Clang")
-  SET_SOURCE_FILES_PROPERTIES(${CMAKE_CURRENT_SOURCE_DIR}/../TH/THAllocator.cpp PROPERTIES COMPILE_FLAGS "-fno-openmp")
-ENDIF()
-
-FILE(GLOB cpu_kernel_cpp_in RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "native/cpu/*.cpp")
-
-LIST(APPEND CPU_CAPABILITY_NAMES "DEFAULT")
-IF(MSVC)
-  LIST(APPEND CPU_CAPABILITY_FLAGS "${MSVC_OPT_FLAG}")
-ELSE(MSVC)
-  LIST(APPEND CPU_CAPABILITY_FLAGS "-O3")
-ENDIF(MSVC)
-
-IF(CXX_AVX_FOUND)
-  SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DHAVE_AVX_CPU_DEFINITION")
-  LIST(APPEND CPU_CAPABILITY_NAMES "AVX")
-  IF(MSVC)
-    LIST(APPEND CPU_CAPABILITY_FLAGS "${MSVC_OPT_FLAG}/arch:AVX")
-  ELSE(MSVC)
-    LIST(APPEND CPU_CAPABILITY_FLAGS "-O3 -mavx")
-  ENDIF(MSVC)
-ENDIF(CXX_AVX_FOUND)
-
-IF(CXX_AVX2_FOUND)
-  SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DHAVE_AVX2_CPU_DEFINITION")
-  LIST(APPEND CPU_CAPABILITY_NAMES "AVX2")
-  IF(MSVC)
-    LIST(APPEND CPU_CAPABILITY_FLAGS "${MSVC_OPT_FLAG}/arch:AVX2")
-  ELSE(MSVC)
-    LIST(APPEND CPU_CAPABILITY_FLAGS "-O3 -mavx2")
-  ENDIF(MSVC)
-ENDIF(CXX_AVX2_FOUND)
-
-list(LENGTH CPU_CAPABILITY_NAMES NUM_CPU_CAPABILITY_NAMES)
-math(EXPR NUM_CPU_CAPABILITY_NAMES "${NUM_CPU_CAPABILITY_NAMES}-1")
-
-FOREACH(i RANGE ${NUM_CPU_CAPABILITY_NAMES})
-  FOREACH(IMPL ${cpu_kernel_cpp_in})
-    LIST(GET CPU_CAPABILITY_NAMES ${i} CPU_CAPABILITY)
-    SET(NEW_IMPL ${CMAKE_CURRENT_BINARY_DIR}/${IMPL}.${CPU_CAPABILITY}.cpp)
-    CONFIGURE_FILE(${IMPL} ${NEW_IMPL} COPYONLY)
-    SET(cpu_kernel_cpp ${NEW_IMPL} ${cpu_kernel_cpp}) # Create list of copies
-    LIST(GET CPU_CAPABILITY_FLAGS ${i} FLAGS)
-    IF(MSVC)
-      SET(MACRO_FLAG "/DCPU_CAPABILITY=${CPU_CAPABILITY} /DCPU_CAPABILITY_${CPU_CAPABILITY}")
-    ELSE(MSVC)
-      SET(MACRO_FLAG "-DCPU_CAPABILITY=${CPU_CAPABILITY} -DCPU_CAPABILITY_${CPU_CAPABILITY}")
-    ENDIF(MSVC)
-    SET_SOURCE_FILES_PROPERTIES(${NEW_IMPL} PROPERTIES COMPILE_FLAGS "${FLAGS} ${MACRO_FLAG}")
-  ENDFOREACH()
-ENDFOREACH()
-
-################################################################################
-# Helper functions
-################################################################################
-
-FUNCTION(EXCLUDE_DIR list_name dir_name)
-  # A helper that excludes all files that contain dir_name in their file path
-  SET(local_list ${${list_name}})
-  FOREACH(source ${local_list})
-    IF(${source} MATCHES ${dir_name})
-      MESSAGE(STATUS "Excluding " ${source} " from the build")
-      LIST(REMOVE_ITEM local_list ${source})
-    ENDIF()
-  ENDFOREACH()
-  SET(${list_name} ${local_list} PARENT_SCOPE)
-ENDFUNCTION()
-
-function(filter_list output input)
-    unset(result)
-    foreach(filename ${${input}})
-        foreach(pattern ${ARGN})
-            if("${filename}" MATCHES "${pattern}")
-                list(APPEND result "${filename}")
-            endif()
-        endforeach()
-    endforeach()
-    set(${output} ${result} PARENT_SCOPE)
-endfunction()
-
+if(NOT MSVC)
+  string(APPEND CMAKE_CXX_FLAGS " -Wno-ignored-qualifiers")
+  string(APPEND CMAKE_C_FLAGS " -Wno-ignored-qualifiers")
+  string(APPEND CMAKE_CXX_FLAGS " -Wno-absolute-value")
+  string(APPEND CMAKE_C_FLAGS " -Wno-absolute-value")
+endif(NOT MSVC)
 
 # Can be compiled standalone
-IF(NOT AT_INSTALL_BIN_DIR OR NOT AT_INSTALL_LIB_DIR OR NOT AT_INSTALL_INCLUDE_DIR OR NOT AT_INSTALL_SHARE_DIR)
-  SET(AT_INSTALL_BIN_DIR "bin" CACHE PATH "AT install binary subdirectory")
-  SET(AT_INSTALL_LIB_DIR "lib" CACHE PATH "AT install library subdirectory")
-  SET(AT_INSTALL_INCLUDE_DIR "include" CACHE PATH "AT install include subdirectory")
-  SET(AT_INSTALL_SHARE_DIR "share" CACHE PATH "AT install include subdirectory")
-ENDIF()
+if(NOT AT_INSTALL_BIN_DIR OR NOT AT_INSTALL_LIB_DIR OR NOT AT_INSTALL_INCLUDE_DIR OR NOT AT_INSTALL_SHARE_DIR)
+  set(AT_INSTALL_BIN_DIR "bin" CACHE PATH "AT install binary subdirectory")
+  set(AT_INSTALL_LIB_DIR "lib" CACHE PATH "AT install library subdirectory")
+  set(AT_INSTALL_INCLUDE_DIR "include" CACHE PATH "AT install include subdirectory")
+  set(AT_INSTALL_SHARE_DIR "share" CACHE PATH "AT install include subdirectory")
+endif()
 
-# TODO: Maybe put these in the generated files directory
-CONFIGURE_FILE(Config.h.in "${CMAKE_CURRENT_SOURCE_DIR}/Config.h")
-CONFIGURE_FILE(cuda/CUDAConfig.h.in "${CMAKE_CURRENT_SOURCE_DIR}/cuda/CUDAConfig.h")
+# this flag is used in Config but set externally, we must normalize it
+# to 0/1 otherwise `#if ON` will be evaluated to false.
+if(CAFFE2_STATIC_LINK_CUDA)
+  set(CAFFE2_STATIC_LINK_CUDA_INT 1)
+else()
+  set(CAFFE2_STATIC_LINK_CUDA_INT 0)
+endif()
+configure_file(Config.h.in "${CMAKE_CURRENT_SOURCE_DIR}/Config.h")
+# TODO: Don't unconditionally generate CUDAConfig.h.in.  Unfortunately,
+# this file generates AT_ROCM_ENABLED() which is required by the miopen
+# files, which are compiled even if we are doing a vanilla CUDA build.
+# Once we properly split CUDA and HIP in ATen, we can remove this code.
+configure_file(cuda/CUDAConfig.h.in "${CMAKE_CURRENT_SOURCE_DIR}/cuda/CUDAConfig.h")
+if(USE_ROCM)
+  configure_file(hip/HIPConfig.h.in "${CMAKE_CURRENT_SOURCE_DIR}/hip/HIPConfig.h")
+endif()
 
 # NB: If you edit these globs, you'll have to update setup.py package_data as well
-FILE(GLOB base_h RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "*.h" "detail/*.h")
-FILE(GLOB base_cpp RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "*.cpp" "detail/*.cpp")
+file(GLOB_RECURSE ATen_CORE_HEADERS  "core/*.h")
+file(GLOB_RECURSE ATen_CORE_SRCS "core/*.cpp")
+file(GLOB_RECURSE ATen_CORE_TEST_SRCS "core/*_test.cpp")
+EXCLUDE(ATen_CORE_SRCS "${ATen_CORE_SRCS}" ${ATen_CORE_TEST_SRCS})
 
-FILE(GLOB cuda_h RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "cuda/*.h" "cuda/detail/*.h" "cuda/*.cuh" "cuda/detail/*.cuh")
-FILE(GLOB cuda_cpp RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "cuda/*.cpp" "cuda/detail/*.cpp")
-FILE(GLOB cuda_cu RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "cuda/*.cu" "cuda/detail/*.cu")
-FILE(GLOB cudnn_h RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "cudnn/*.h" "cudnn/*.cuh")
-FILE(GLOB cudnn_cpp RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "cudnn/*.cpp")
-FILE(GLOB mkl_cpp RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "mkl/*.cpp")
-FILE(GLOB mkldnn_cpp RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "mkldnn/*.cpp")
+file(GLOB base_h "*.h" "detail/*.h" "cpu/*.h" "cpu/vec256/*.h" "quantized/*.h")
+file(GLOB base_cpp "*.cpp" "detail/*.cpp" "cpu/*.cpp")
+file(GLOB cuda_h "cuda/*.h" "cuda/detail/*.h" "cuda/*.cuh" "cuda/detail/*.cuh")
+file(GLOB cuda_cpp "cuda/*.cpp" "cuda/detail/*.cpp")
+file(GLOB cuda_nvrtc_stub_h "cuda/nvrtc_stub/*.h")
+file(GLOB cuda_nvrtc_stub_cpp "cuda/nvrtc_stub/*.cpp")
+file(GLOB cuda_cu "cuda/*.cu" "cuda/detail/*.cu")
+file(GLOB cudnn_h "cudnn/*.h" "cudnn/*.cuh")
+file(GLOB cudnn_cpp "cudnn/*.cpp")
 
-FILE(GLOB native_cpp RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "native/*.cpp")
-FILE(GLOB native_cudnn_cpp RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "native/cudnn/*.cpp")
-FILE(GLOB native_cuda_cu RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "native/cuda/*.cu")
-FILE(GLOB native_cuda_cpp RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "native/cuda/*.cpp")
-FILE(GLOB native_mkl_cpp RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "native/mkl/*.cpp")
-FILE(GLOB native_mkldnn_cpp RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "native/mkldnn/*.cpp")
+file(GLOB hip_h "hip/*.h" "hip/detail/*.h" "hip/*.cuh" "hip/detail/*.cuh" "hip/impl/*.h")
+file(GLOB hip_cpp "hip/*.cpp" "hip/detail/*.cpp" "hip/impl/*.cpp")
+file(GLOB hip_hip "hip/*.hip" "hip/detail/*.hip" "hip/impl/*.hip")
+file(GLOB hip_nvrtc_stub_h "hip/nvrtc_stub/*.h")
+file(GLOB hip_nvrtc_stub_cpp "hip/nvrtc_stub/*.cpp")
+file(GLOB miopen_h "miopen/*.h")
+file(GLOB miopen_cpp "miopen/*.cpp")
 
-FILE(GLOB all_python RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "*.py")
+file(GLOB mkl_cpp "mkl/*.cpp")
+file(GLOB mkldnn_cpp "mkldnn/*.cpp")
 
-IF(DEFINED ENV{PYTORCH_PYTHON})
-  message(STATUS "Using python found in $ENV{PYTORCH_PYTHON}")
-  SET(PYCMD "$ENV{PYTORCH_PYTHON}")
-ELSE()
-  SET(PYCMD "python")
-ENDIF()
+file(GLOB native_cpp "native/*.cpp")
+file(GLOB native_mkl_cpp "native/mkl/*.cpp")
+file(GLOB native_mkldnn_cpp "native/mkldnn/*.cpp")
+file(GLOB vulkan_cpp "vulkan/*.cpp")
+file(GLOB native_vulkan_cpp "native/vulkan/api/*.cpp" "native/vulkan/*.cpp")
+file(GLOB native_sparse_cpp "native/sparse/*.cpp")
+file(GLOB native_quantized_cpp
+            "native/quantized/*.cpp"
+            "native/quantized/cpu/*.cpp")
+file(GLOB native_h "native/*.h")
+file(GLOB native_quantized_h "native/quantized/*.h" "native/quantized/cpu/*.h")
+file(GLOB native_cpu_h "native/cpu/*.h")
 
-SET(GEN_COMMAND
-    ${PYCMD} ${CMAKE_CURRENT_SOURCE_DIR}/gen.py
-    -s ${CMAKE_CURRENT_SOURCE_DIR}
-    ${cwrap_files}
-)
+file(GLOB native_cuda_cu_sp "native/cuda/Unique.cu" "native/cuda/TensorFactories.cu")
+file(GLOB native_cuda_cu "native/cuda/*.cu")
+exclude(native_cuda_cu "${native_cuda_cu}" ${native_cuda_cu_sp})
+file(GLOB native_cuda_cpp "native/cuda/*.cpp")
+file(GLOB native_cuda_h "native/cuda/*.h" "native/cuda/*.cuh")
+file(GLOB native_hip_h "native/hip/*.h" "native/hip/*.cuh")
+file(GLOB native_cudnn_cpp "native/cudnn/*.cpp")
+file(GLOB native_sparse_cuda_cu "native/sparse/cuda/*.cu")
+file(GLOB native_sparse_cuda_cpp "native/sparse/cuda/*.cpp")
+file(GLOB native_quantized_cuda_cu "native/quantized/cuda/*.cu")
+file(GLOB native_quantized_cuda_cpp "native/quantized/cuda/*.cpp")
 
-EXECUTE_PROCESS(
-    COMMAND ${GEN_COMMAND}
-      --output-dependencies ${CMAKE_CURRENT_BINARY_DIR}/generated_cpp.txt
-    RESULT_VARIABLE RETURN_VALUE
-)
-if (NOT RETURN_VALUE EQUAL 0)
-    message(STATUS ${generated_cpp})
-    message(FATAL_ERROR "Failed to get generated_cpp list")
-endif()
-file(READ ${CMAKE_CURRENT_BINARY_DIR}/generated_cpp.txt generated_cpp)
-file(READ ${CMAKE_CURRENT_BINARY_DIR}/generated_cpp.txt-cuda cuda_generated_cpp)
+file(GLOB native_hip_hip "native/hip/*.hip")
+file(GLOB native_hip_cpp "native/hip/*.cpp")
+file(GLOB native_miopen_cpp "native/miopen/*.cpp")
+file(GLOB native_cudnn_hip_cpp "native/cudnn/hip/*.cpp")
+file(GLOB native_sparse_hip_hip "native/sparse/hip/*.hip")
+file(GLOB native_sparse_hip_cpp "native/sparse/hip/*.cpp")
+file(GLOB native_quantized_hip_hip "native/quantized/hip/*.hip")
+file(GLOB native_quantized_hip_cpp "native/quantized/hip/*.cpp")
+file(GLOB native_utils_cpp "native/utils/*.cpp")
 
-FILE(GLOB_RECURSE all_templates "templates/*")
+# XNNPACK
+file(GLOB native_xnnpack "native/xnnpack/*.cpp")
 
-FILE(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/ATen)
+# Add files needed from jit folders
+append_filelist("jit_core_headers" ATen_CORE_HEADERS)
+append_filelist("jit_core_sources" ATen_CORE_SRCS)
 
-ADD_CUSTOM_COMMAND(OUTPUT ${generated_cpp} ${cuda_generated_cpp}
-COMMAND ${GEN_COMMAND}
-DEPENDS ${all_python} ${all_templates} ${cwrap_files})
-
-# Generated headers used from a cuda (.cu) file are
-# not tracked correctly in cmake . We make the libATen.so depend explicitly
-# on building the generated aten files to workaround.
-ADD_CUSTOM_TARGET(aten_files_are_generated
-  DEPENDS ${generated_cpp}
-)
-
-ADD_CUSTOM_TARGET(cuda_aten_files_are_generated
-  DEPENDS ${cuda_generated_cpp}
-)
-
-set(all_cpu_cpp ${base_cpp} ${native_cpp} ${native_mkl_cpp} ${native_mkldnn_cpp} ${generated_cpp} ${ATen_CPU_SRCS} ${cpu_kernel_cpp})
+add_subdirectory(quantized)
+set(all_cpu_cpp ${base_cpp} ${ATen_CORE_SRCS} ${native_cpp} ${native_sparse_cpp} ${native_quantized_cpp} ${native_mkl_cpp} ${native_mkldnn_cpp} ${native_utils_cpp} ${native_xnnpack} ${generated_cpp} ${core_generated_cpp} ${ATen_CPU_SRCS} ${ATen_QUANTIZED_SRCS} ${cpu_kernel_cpp})
 if(AT_MKL_ENABLED)
   set(all_cpu_cpp ${all_cpu_cpp} ${mkl_cpp})
 endif()
 if(AT_MKLDNN_ENABLED)
   set(all_cpu_cpp ${all_cpu_cpp} ${mkldnn_cpp})
 endif()
+if(USE_VULKAN)
+  set(all_cpu_cpp ${all_cpu_cpp} ${vulkan_cpp} ${native_vulkan_cpp} ${vulkan_generated_cpp})
+else()
+  set(all_cpu_cpp ${all_cpu_cpp} ${vulkan_cpp})
+endif()
 
-INCLUDE_DIRECTORIES(${ATen_CPU_INCLUDE})
-IF(NOT NO_CUDA OR WITH_ROCM)
-  INCLUDE_DIRECTORIES(${ATen_CUDA_INCLUDE})
-  INCLUDE_DIRECTORIES("${CMAKE_CURRENT_SOURCE_DIR}/cuda")
-  set(ATen_CUDA_SRCS ${ATen_CUDA_SRCS} ${cuda_cu} ${native_cuda_cu})
-  set(all_cuda_cpp ${native_cudnn_cpp} ${cuda_cpp} ${native_cuda_cpp} ${cuda_generated_cpp} ${ATen_CUDA_SRCS})
-  IF(CUDNN_FOUND)
-    SET(all_cuda_cpp ${all_cuda_cpp} ${cudnn_cpp})
-  ENDIF()
+if(USE_CUDA AND USE_ROCM)
+  message(FATAL_ERROR "ATen doesn't not currently support simultaneously building with CUDA and ROCM")
+endif()
+
+if(USE_CUDA)
+  list(APPEND ATen_CUDA_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/cuda)
+  set(ATen_CUDA_SRCS ${ATen_CUDA_SRCS} ${cuda_cu} ${native_cuda_cu} ${native_sparse_cuda_cu} ${native_quantized_cuda_cu})
+  set(ATen_CUDA_SRCS_W_SORT_BY_KEY ${ATen_CUDA_SRCS_W_SORT_BY_KEY} ${native_cuda_cu_sp})
+  set(all_cuda_cpp ${native_sparse_cuda_cpp} ${native_quantized_cuda_cpp} ${cuda_cpp} ${native_cuda_cpp} ${cuda_generated_cpp} ${ATen_CUDA_SRCS})
+  set(all_cuda_cpp ${native_cudnn_cpp} ${native_miopen_cpp} ${all_cuda_cpp})
+  if(CAFFE2_USE_CUDNN)
+    set(all_cuda_cpp ${all_cuda_cpp} ${cudnn_cpp})
+  endif()
+endif()
+
+if(USE_ROCM)
+  list(APPEND ATen_HIP_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/hip)
+  set(ATen_HIP_SRCS ${ATen_HIP_SRCS} ${hip_hip} ${native_hip_hip} ${native_sparse_hip_hip} ${native_quantized_hip_hip})
+  # TODO: Codegen separate files for HIP and use those (s/cuda_generated_cpp/hip_generated_cpp)
+  set(all_hip_cpp ${native_sparse_hip_cpp} ${native_quantized_hip_cpp} ${hip_cpp} ${native_hip_cpp} ${cuda_generated_cpp} ${ATen_HIP_SRCS})
+  set(all_hip_cpp ${native_miopen_cpp} ${native_cudnn_hip_cpp} ${miopen_cpp} ${all_hip_cpp})
 endif()
 
 filter_list(generated_h generated_cpp "\\.h$")
 filter_list(cuda_generated_h cuda_generated_cpp "\\.h$")
+filter_list(core_generated_h core_generated_cpp "\\.h$")
+# TODO: When we have hip_generated_cpp
+#filter_list(hip_generated_h hip_generated_cpp "\\.h$")
 
-INCLUDE_DIRECTORIES(${CMAKE_CURRENT_SOURCE_DIR}/..)
+list(APPEND ATen_CPU_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 # so the build can find the generated header files
-INCLUDE_DIRECTORIES(${CMAKE_CURRENT_BINARY_DIR})
-IF(NOT AT_LINK_STYLE)
-  SET(AT_LINK_STYLE SHARED)
-ENDIF()
+list(APPEND ATen_CPU_INCLUDE ${CMAKE_CURRENT_BINARY_DIR})
 
-# We have two libraries: libATen_cpu.so and libATen_cuda.so,
-# with libATen_cuda.so depending on libATen_cpu.so.  The CPU library
-# contains CPU code only.  libATen_cpu.so is invariant to the setting
-# of NO_CUDA (it always builds the same way); libATen_cuda.so is only
-# built when NO_CUDA=0 and CUDA is available.
-
-add_library(ATen_cpu ${AT_LINK_STYLE} ${all_cpu_cpp})
-add_dependencies(ATen_cpu aten_files_are_generated)
-if(NOT NO_CUDA OR WITH_ROCM)
-  TORCH_CUDA_BASED_ADD_LIBRARY(ATen_cuda ${AT_LINK_STYLE} ${all_cuda_cpp})
-  target_link_libraries(ATen_cuda ATen_cpu)
-  add_dependencies(ATen_cuda cuda_aten_files_are_generated)
-  caffe2_interface_library(ATen_cuda ATen_cuda_library)
+if(USE_TBB)
+  message("ATen is compiled with TBB (${TBB_ROOT_DIR})")
+  list(APPEND ATen_CPU_INCLUDE ${TBB_ROOT_DIR}/include)
+  list(APPEND ATen_CPU_DEPENDENCY_LIBS tbb)
 endif()
 
-function(aten_compile_options libname)
-  target_compile_options(${libname}
-    PRIVATE
-    -Wall
-    -Wextra
-    -fexceptions
-    -Wno-missing-field-initializers
-    -Wno-type-limits
-    -Wno-unused-parameter
-    -Wno-unknown-warning-option
-    -Wno-unknown-pragmas)
+if(BLAS_FOUND)
+  if($ENV{TH_BINARY_BUILD})
+    message(STATUS "TH_BINARY_BUILD detected. Enabling special linkage.")
+    list(APPEND ATen_CPU_DEPENDENCY_LIBS
+      "${BLAS_LIBRARIES};${BLAS_LIBRARIES};${BLAS_LIBRARIES}")
+  else($ENV{TH_BINARY_BUILD})
+    list(APPEND ATen_CPU_DEPENDENCY_LIBS ${BLAS_LIBRARIES})
+  endif($ENV{TH_BINARY_BUILD})
+endif(BLAS_FOUND)
 
-  if ($ENV{WERROR})
-    target_compile_options(${libname} PRIVATE -Werror)
-  endif()
-endfunction()
-
-if(NOT MSVC)
-  aten_compile_options(ATen_cpu)
-  if(NOT NO_CUDA OR WITH_ROCM)
-    aten_compile_options(ATen_cuda)
-  endif()
-endif()
-
-set(TBB_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/tbb")
-set(TBB_BUILD_STATIC ON CACHE BOOL " " FORCE)
-set(TBB_BUILD_SHARED OFF CACHE BOOL " " FORCE)
-set(TBB_BUILD_TBBMALLOC OFF CACHE BOOL " " FORCE)
-set(TBB_BUILD_TBBMALLOC_PROXY OFF CACHE BOOL " " FORCE)
-set(TBB_BUILD_TESTS OFF CACHE BOOL " " FORCE)
-add_subdirectory(cpu/tbb)
-set_property(TARGET tbb_static tbb_def_files PROPERTY FOLDER "dependencies")
-target_include_directories(tbb_static PUBLIC ${TBB_ROOT_DIR}/include)
-target_link_libraries(ATen_cpu tbb_static)
-
-if(NOT ${CMAKE_VERSION} VERSION_LESS "3.1")
-  set_property(TARGET ATen_cpu PROPERTY CXX_STANDARD 11)
-  if(NOT NO_CUDA OR WITH_ROCM)
-    set_property(TARGET ATen_cuda PROPERTY CXX_STANDARD 11)
-  endif()
-endif()
-
-IF(BLAS_FOUND)
-  IF ($ENV{TH_BINARY_BUILD})
-    MESSAGE(STATUS "TH_BINARY_BUILD detected. Enabling special linkage.")
-    TARGET_LINK_LIBRARIES(ATen_cpu "${BLAS_LIBRARIES};${BLAS_LIBRARIES};${BLAS_LIBRARIES}")
-    if(NOT NO_CUDA OR WITH_ROCM)
-      TARGET_LINK_LIBRARIES(ATen_cuda "${BLAS_LIBRARIES};${BLAS_LIBRARIES};${BLAS_LIBRARIES}")
-    endif()
-  ELSE ($ENV{TH_BINARY_BUILD})
-    TARGET_LINK_LIBRARIES(ATen_cpu ${BLAS_LIBRARIES})
-    if(NOT NO_CUDA OR WITH_ROCM)
-      TARGET_LINK_LIBRARIES(ATen_cuda "${BLAS_LIBRARIES}")
-    endif()
-  ENDIF ($ENV{TH_BINARY_BUILD})
-ENDIF(BLAS_FOUND)
-
-IF(LAPACK_FOUND)
-  TARGET_LINK_LIBRARIES(ATen_cpu ${LAPACK_LIBRARIES})
-  if(NOT NO_CUDA OR WITH_ROCM)
+if(LAPACK_FOUND)
+  list(APPEND ATen_CPU_DEPENDENCY_LIBS ${LAPACK_LIBRARIES})
+  if(USE_CUDA AND MSVC)
     # Although Lapack provides CPU (and thus, one might expect that ATen_cuda
     # would not need this at all), some of our libraries (magma in particular)
     # backend to CPU BLAS/LAPACK implementations, and so it is very important
     # we get the *right* implementation, because even if the symbols are the
     # same, LAPACK implementions may have different calling conventions.
     # This caused https://github.com/pytorch/pytorch/issues/7353
-    TARGET_LINK_LIBRARIES(ATen_cuda ${LAPACK_LIBRARIES})
+    #
+    # We do NOT do this on Linux, since we just rely on torch_cpu to
+    # provide all of the symbols we need
+    list(APPEND ATen_CUDA_DEPENDENCY_LIBS ${LAPACK_LIBRARIES})
   endif()
-ENDIF(LAPACK_FOUND)
+endif(LAPACK_FOUND)
 
-IF (UNIX AND NOT APPLE)
-   INCLUDE(CheckLibraryExists)
+if(UNIX AND NOT APPLE)
+   include(CheckLibraryExists)
    # https://github.com/libgit2/libgit2/issues/2128#issuecomment-35649830
    CHECK_LIBRARY_EXISTS(rt clock_gettime "time.h" NEED_LIBRT)
-   IF(NEED_LIBRT)
-     TARGET_LINK_LIBRARIES(ATen_cpu rt)
-     SET(CMAKE_REQUIRED_LIBRARIES ${CMAKE_REQUIRED_LIBRARIES} rt)
-   ENDIF(NEED_LIBRT)
-ENDIF(UNIX AND NOT APPLE)
+   if(NEED_LIBRT)
+     list(APPEND ATen_CPU_DEPENDENCY_LIBS rt)
+     set(CMAKE_REQUIRED_LIBRARIES ${CMAKE_REQUIRED_LIBRARIES} rt)
+   endif(NEED_LIBRT)
+endif(UNIX AND NOT APPLE)
 
-IF(UNIX)
-  SET(CMAKE_EXTRA_INCLUDE_FILES "sys/mman.h")
+if(UNIX)
+  set(CMAKE_EXTRA_INCLUDE_FILES "sys/mman.h")
   CHECK_FUNCTION_EXISTS(mmap HAVE_MMAP)
-  IF(HAVE_MMAP)
-    ADD_DEFINITIONS(-DHAVE_MMAP=1)
-  ENDIF(HAVE_MMAP)
+  if(HAVE_MMAP)
+    add_definitions(-DHAVE_MMAP=1)
+  endif(HAVE_MMAP)
   # done for lseek: https://www.gnu.org/software/libc/manual/html_node/File-Position-Primitive.html
-  ADD_DEFINITIONS(-D_FILE_OFFSET_BITS=64)
+  add_definitions(-D_FILE_OFFSET_BITS=64)
   CHECK_FUNCTION_EXISTS(shm_open HAVE_SHM_OPEN)
-  IF(HAVE_SHM_OPEN)
-    ADD_DEFINITIONS(-DHAVE_SHM_OPEN=1)
-  ENDIF(HAVE_SHM_OPEN)
+  if(HAVE_SHM_OPEN)
+    add_definitions(-DHAVE_SHM_OPEN=1)
+  endif(HAVE_SHM_OPEN)
   CHECK_FUNCTION_EXISTS(shm_unlink HAVE_SHM_UNLINK)
-  IF(HAVE_SHM_UNLINK)
-    ADD_DEFINITIONS(-DHAVE_SHM_UNLINK=1)
-  ENDIF(HAVE_SHM_UNLINK)
+  if(HAVE_SHM_UNLINK)
+    add_definitions(-DHAVE_SHM_UNLINK=1)
+  endif(HAVE_SHM_UNLINK)
   CHECK_FUNCTION_EXISTS(malloc_usable_size HAVE_MALLOC_USABLE_SIZE)
-  IF(HAVE_MALLOC_USABLE_SIZE)
-    ADD_DEFINITIONS(-DHAVE_MALLOC_USABLE_SIZE=1)
-  ENDIF(HAVE_MALLOC_USABLE_SIZE)
-ENDIF(UNIX)
+  if(HAVE_MALLOC_USABLE_SIZE)
+    add_definitions(-DHAVE_MALLOC_USABLE_SIZE=1)
+  endif(HAVE_MALLOC_USABLE_SIZE)
+endif(UNIX)
 
-IF(NOT MSVC)
-  TARGET_LINK_LIBRARIES(ATen_cpu m)
-ELSE(NOT MSVC)
-  IF(AT_MKL_MT)
-    set_target_properties(ATen_cpu PROPERTIES LINK_FLAGS_RELEASE "/NODEFAULTLIB:${VCOMP_LIB}")
-    set_target_properties(ATen_cpu PROPERTIES LINK_FLAGS_DEBUG "/NODEFAULTLIB:${VCOMP_LIB}")
-    set_target_properties(ATen_cpu PROPERTIES STATIC_LIBRARY_FLAGS "/NODEFAULTLIB:${VCOMP_LIB}")
-    if(NOT NO_CUDA OR WITH_ROCM)
-      set_target_properties(ATen_cuda PROPERTIES LINK_FLAGS_RELEASE "/NODEFAULTLIB:${VCOMP_LIB}")
-      set_target_properties(ATen_cuda PROPERTIES LINK_FLAGS_DEBUG "/NODEFAULTLIB:${VCOMP_LIB}")
-      set_target_properties(ATen_cuda PROPERTIES STATIC_LIBRARY_FLAGS "/NODEFAULTLIB:${VCOMP_LIB}")
-    endif()
-  ENDIF(AT_MKL_MT)
-ENDIF(NOT MSVC)
+ADD_DEFINITIONS(-DUSE_EXTERNAL_MZCRC)
 
-# Is __thread supported?
-IF(NOT MSVC)
-  CHECK_C_SOURCE_COMPILES("static __thread int x = 1; int main() { return x; }" C_HAS_THREAD)
-ELSE(NOT MSVC)
-  CHECK_C_SOURCE_COMPILES("static __declspec( thread ) int x = 1; int main() { return x; }" C_HAS_THREAD)
-ENDIF(NOT MSVC)
-IF(NOT C_HAS_THREAD)
-  MESSAGE(STATUS "Warning: __thread is not supported, generating thread-unsafe code")
-ELSE(NOT C_HAS_THREAD)
-  add_compile_options(-DTH_HAVE_THREAD)
-ENDIF(NOT C_HAS_THREAD)
+if(NOT MSVC)
+  list(APPEND ATen_CPU_DEPENDENCY_LIBS m)
+endif()
+
+if(AT_NNPACK_ENABLED)
+  include_directories(${NNPACK_INCLUDE_DIRS})
+  list(APPEND ATen_CPU_DEPENDENCY_LIBS nnpack) # cpuinfo is added below
+endif()
 
 if(MKLDNN_FOUND)
-  target_link_libraries(ATen_cpu ${MKLDNN_LIBRARIES})
+  list(APPEND ATen_CPU_DEPENDENCY_LIBS ${MKLDNN_LIBRARIES})
 endif(MKLDNN_FOUND)
 
-# Directory where cpuinfo will download and build all dependencies
-set(CONFU_DEPENDENCIES_BINARY_DIR ${PROJECT_BINARY_DIR}/confu-deps
-  CACHE PATH "Confu-style dependencies binary directory")
+list(APPEND ATen_CPU_DEPENDENCY_LIBS cpuinfo)
 
-# ---[ Configure cpuinfo
-if (NOT TARGET cpuinfo)
-  if (NOT DEFINED CPUINFO_SOURCE_DIR)
-    set(CPUINFO_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/cpuinfo" CACHE STRING "cpuinfo source directory")
+if(NOT MSVC AND NOT EMSCRIPTEN AND NOT INTERN_BUILD_MOBILE)
+  # Preserve values for the main build
+  set(__aten_sleef_build_shared_libs ${BUILD_SHARED_LIBS})
+  set(__aten_sleef_build_tests ${BUILD_TESTS})
+
+  # Unset our restrictive C++ flags here and reset them later.
+  # Remove this once we use proper target_compile_options.
+  set(OLD_CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
+  set(CMAKE_CXX_FLAGS)
+
+  # Bump up optimization level for sleef to -O1, since at -O0 the compiler
+  # excessively spills intermediate vector registers to the stack
+  # and makes things run impossibly slowly
+  set(OLD_CMAKE_C_FLAGS_DEBUG ${CMAKE_C_FLAGS_DEBUG})
+  if(${CMAKE_C_FLAGS_DEBUG} MATCHES "-O0")
+    string(REGEX REPLACE "-O0" "-O1" CMAKE_C_FLAGS_DEBUG ${OLD_CMAKE_C_FLAGS_DEBUG})
+  else()
+    set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -O1")
   endif()
 
-  set(CPUINFO_BUILD_TOOLS OFF CACHE BOOL "")
-  set(CPUINFO_BUILD_UNIT_TESTS OFF CACHE BOOL "")
-  set(CPUINFO_BUILD_MOCK_TESTS OFF CACHE BOOL "")
-  set(CPUINFO_BUILD_BENCHMARKS OFF CACHE BOOL "")
-  set(CPUINFO_LIBRARY_TYPE "static" CACHE STRING "")
-  if(MSVC)
-    # ATen is built with default MSVC runtime linking, which is /MD (DLL)
-    # so no need to check *_USE_MSVC_STATIC_RUNTIME or some equivalent.
-    set(CPUINFO_RUNTIME_TYPE "shared" CACHE STRING "")
-  endif()
-  add_subdirectory(
-    "${CPUINFO_SOURCE_DIR}"
-    "${CONFU_DEPENDENCIES_BINARY_DIR}/cpuinfo")
-  # We build static version of cpuinfo but link
-  # them into a shared library for Caffe2, so they need PIC.
-  set_property(TARGET cpuinfo PROPERTY POSITION_INDEPENDENT_CODE ON)
-endif()
-TARGET_LINK_LIBRARIES(ATen_cpu cpuinfo)
-
-if(MSVC)
-  set(BUILD_SHARED_LIBS ON CACHE BOOL "Build sleef shared" FORCE)
-else()
-  set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build sleef static" FORCE)
-endif()
-set(BUILD_DFT OFF CACHE BOOL "Don't build sleef DFT lib" FORCE)
-set(BUILD_GNUABI_LIBS OFF CACHE BOOL "Don't build sleef gnuabi libs" FORCE)
-set(BUILD_TESTS OFF CACHE BOOL "Don't build sleef tests" FORCE)
-add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/sleef" ${CMAKE_BINARY_DIR}/sleef)
-set_property(TARGET sleef PROPERTY FOLDER "dependencies")
-include_directories(SYSTEM ${CMAKE_BINARY_DIR}/include)
-link_directories(${CMAKE_BINARY_DIR}/sleef/lib)
-TARGET_LINK_LIBRARIES(ATen_cpu sleef)
-
-IF(NOT NO_CUDA)
-  IF ($ENV{ATEN_STATIC_CUDA})
-    # CuFFT has a complicated static story (especially around CUDA < 9) because it has device callback support
-    # we first have to build a fake lib that links with no device callbacks,
-    # and then we link against this object file.
-    # This was recommended by the CuFFT team at NVIDIA
-
-    # build fake CuFFT lib in build dir
-    EXECUTE_PROCESS(COMMAND touch ${CMAKE_CURRENT_BINARY_DIR}/empty_file.cc)
-    if(${CUDA_VERSION_MAJOR} EQUAL "8")
-      SET(CUFFT_FAKELINK_OPTIONS
-	--generate-code arch=compute_35,code=sm_35
-	--generate-code arch=compute_50,code=sm_50
-	--generate-code arch=compute_60,code=sm_60)
-    elseif(${CUDA_VERSION_MAJOR} EQUAL "9")
-      SET(CUFFT_FAKELINK_OPTIONS
-	--generate-code arch=compute_35,code=sm_35
-	--generate-code arch=compute_50,code=sm_50
-	--generate-code arch=compute_60,code=sm_60
-	--generate-code arch=compute_70,code=sm_70)
+  if(NOT USE_SYSTEM_SLEEF)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build sleef static" FORCE)
+    set(BUILD_DFT OFF CACHE BOOL "Don't build sleef DFT lib" FORCE)
+    set(BUILD_GNUABI_LIBS OFF CACHE BOOL "Don't build sleef gnuabi libs" FORCE)
+    set(BUILD_TESTS OFF CACHE BOOL "Don't build sleef tests" FORCE)
+    set(OLD_CMAKE_BUILD_TYPE ${CMAKE_BUILD_TYPE})
+    if("${CMAKE_C_COMPILER_ID}" STREQUAL "GNU" AND
+        CMAKE_C_COMPILER_VERSION VERSION_GREATER 6.9 AND CMAKE_C_COMPILER_VERSION VERSION_LESS 8)
+      set(GCC_7 True)
     else()
-      MESSAGE(FATAL_ERROR "Unhandled major cuda version ${CUDA_VERSION_MAJOR}")
+      set(GCC_7 False)
     endif()
-    ADD_CUSTOM_COMMAND(
-      OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/cufft_static_library.a
-      COMMAND "${CUDA_TOOLKIT_ROOT_DIR}/bin/nvcc" -o ${CMAKE_CURRENT_BINARY_DIR}/cufft_static_library.a -Xcompiler -fPIC
-      ${CUFFT_FAKELINK_OPTIONS}
-      --device-link ${CMAKE_CURRENT_BINARY_DIR}/empty_file.cc -lcufft_static -lculibos
-      )
-    ADD_CUSTOM_TARGET(FAKELINKED_CUFFT_TARGET DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/cufft_static_library.a)
-    add_library(FAKELINKED_CUFFT STATIC IMPORTED GLOBAL)
-    add_dependencies(FAKELINKED_CUFFT FAKELINKED_CUFFT_TARGET)
-    set_target_properties(FAKELINKED_CUFFT PROPERTIES IMPORTED_LOCATION ${CMAKE_CURRENT_BINARY_DIR}/cufft_static_library.a)
+    if(GCC_7)
+      set(CMAKE_BUILD_TYPE Release)  # Always build Sleef as a Release build to work around a gcc-7 bug
+    endif()
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/sleef" ${CMAKE_BINARY_DIR}/sleef)
+    if(GCC_7)
+      set(CMAKE_BUILD_TYPE ${OLD_CMAKE_BUILD_TYPE})
+    endif()
+    set_property(TARGET sleef PROPERTY FOLDER "dependencies")
+    list(APPEND ATen_THIRD_PARTY_INCLUDE ${CMAKE_BINARY_DIR}/include)
+    link_directories(${CMAKE_BINARY_DIR}/sleef/lib)
+  else()
+    add_library(sleef SHARED IMPORTED)
+    find_library(SLEEF_LIBRARY sleef)
+    if(NOT SLEEF_LIBRARY)
+      message(FATAL_ERROR "Cannot find sleef")
+    endif()
+    message("Found sleef: ${SLEEF_LIBRARY}")
+    set_target_properties(sleef PROPERTIES IMPORTED_LOCATION "${SLEEF_LIBRARY}")
+  endif()
+  list(APPEND ATen_CPU_DEPENDENCY_LIBS sleef)
 
-    TARGET_LINK_LIBRARIES(ATen_cuda
+  set(CMAKE_C_FLAGS_DEBUG ${OLD_CMAKE_C_FLAGS_DEBUG})
+  set(CMAKE_CXX_FLAGS ${OLD_CMAKE_CXX_FLAGS})
+
+  # Set these back. TODO: Use SLEEF_ to pass these instead
+  set(BUILD_SHARED_LIBS ${__aten_sleef_build_shared_libs} CACHE BOOL "Build shared libs" FORCE)
+  set(BUILD_TESTS ${__aten_sleef_build_tests} CACHE BOOL "Build tests" FORCE)
+endif()
+
+if(USE_CUDA AND NOT USE_ROCM)
+  if($ENV{ATEN_STATIC_CUDA})
+    list(APPEND ATen_CUDA_DEPENDENCY_LIBS
       ${CUDA_LIBRARIES}
       ${CUDA_TOOLKIT_ROOT_DIR}/lib64/libcusparse_static.a
       ${CUDA_TOOLKIT_ROOT_DIR}/lib64/libcurand_static.a
       ${CUDA_TOOLKIT_ROOT_DIR}/lib64/libcublas_static.a
-      FAKELINKED_CUFFT
-      ${CUDA_TOOLKIT_ROOT_DIR}/lib64/libcufft_static.a
+      ${CUDA_TOOLKIT_ROOT_DIR}/lib64/libcufft_static_nocallback.a
+      ${CUDA_TOOLKIT_ROOT_DIR}/lib64/libcusolver_static.a
       )
-  ELSE()
-    TARGET_LINK_LIBRARIES(ATen_cuda
+  else()
+    list(APPEND ATen_CUDA_DEPENDENCY_LIBS
       ${CUDA_LIBRARIES}
       ${CUDA_cusparse_LIBRARY}
-      ${CUDA_curand_LIBRARY})
-    CUDA_ADD_CUBLAS_TO_TARGET(ATen_cuda)
-    CUDA_ADD_CUFFT_TO_TARGET(ATen_cuda)
-  ENDIF()
+      ${CUDA_curand_LIBRARY}
+      ${CUDA_cusolver_LIBRARY}
+      )
+  endif()
 
-  if(CUDNN_FOUND)
-    target_link_libraries(ATen_cuda ${CUDNN_LIBRARIES})
-  endif(CUDNN_FOUND)
+  if(CAFFE2_USE_CUDNN)
+    list(APPEND ATen_CUDA_DEPENDENCY_LIBS ${CUDNN_LIBRARIES})
+  endif()
 
-  IF(USE_MAGMA)
-    TARGET_LINK_LIBRARIES(ATen_cuda ${MAGMA_LIBRARIES})
-    IF ($ENV{TH_BINARY_BUILD})
-      TARGET_LINK_LIBRARIES(ATen_cuda "${BLAS_LIBRARIES};${BLAS_LIBRARIES};${BLAS_LIBRARIES}")
-    ENDIF($ENV{TH_BINARY_BUILD})
-  ENDIF(USE_MAGMA)
-  IF ($ENV{ATEN_STATIC_CUDA})
-    TARGET_LINK_LIBRARIES(ATen_cuda "${CUDA_TOOLKIT_ROOT_DIR}/lib64/libculibos.a")
-  ENDIF($ENV{ATEN_STATIC_CUDA})
-ENDIF()
-
-IF(WITH_ROCM)
- ### Link in the ROCm libraries BLAS / RNG.
- FIND_LIBRARY(HIPBLAS_LIBRARY hipblas HINTS ${HIPBLAS_PATH}/lib)
- FIND_LIBRARY(HIPRNG_LIBRARY hiprng HINTS ${HIPRNG_PATH}/lib)
-
- TARGET_LINK_LIBRARIES(ATen_cuda ${HIPBLAS_LIBRARY} ${HIPRNG_LIBRARY})
-ENDIF()
-
-install(TARGETS ATen_cpu
-  RUNTIME DESTINATION "${AT_INSTALL_BIN_DIR}"
-  LIBRARY DESTINATION "${AT_INSTALL_LIB_DIR}"
-  ARCHIVE DESTINATION "${AT_INSTALL_LIB_DIR}")
-
-if(NOT NO_CUDA OR WITH_ROCM)
-  install(TARGETS ATen_cuda
-    RUNTIME DESTINATION "${AT_INSTALL_BIN_DIR}"
-    LIBRARY DESTINATION "${AT_INSTALL_LIB_DIR}"
-    ARCHIVE DESTINATION "${AT_INSTALL_LIB_DIR}")
+  if(USE_MAGMA)
+    list(APPEND ATen_CUDA_DEPENDENCY_LIBS ${MAGMA_LIBRARIES})
+    if(MSVC)
+      if($ENV{TH_BINARY_BUILD})
+        # Do not do this on Linux: see Note [Extra MKL symbols for MAGMA in torch_cpu]
+        # in caffe2/CMakeLists.txt
+        list(APPEND ATen_CUDA_DEPENDENCY_LIBS
+          "${BLAS_LIBRARIES};${BLAS_LIBRARIES};${BLAS_LIBRARIES}")
+      endif($ENV{TH_BINARY_BUILD})
+    endif(MSVC)
+  endif(USE_MAGMA)
+  if($ENV{ATEN_STATIC_CUDA})
+    list(APPEND ATen_CUDA_DEPENDENCY_LIBS "${CUDA_TOOLKIT_ROOT_DIR}/lib64/libculibos.a")
+    list(APPEND ATen_CUDA_DEPENDENCY_LIBS "${CUDA_TOOLKIT_ROOT_DIR}/lib64/libcudart_static.a")
+  endif($ENV{ATEN_STATIC_CUDA})
 endif()
 
-get_target_property(ATEN_CPU_OUTPUT_NAME ATen_cpu LOCATION)
-get_filename_component(ATEN_CPU_OUTPUT_NAME ${ATEN_CPU_OUTPUT_NAME} NAME)
+# NB: We're relying on cmake/Dependencies.cmake to appropriately setup HIP dependencies.
+# In principle we could duplicate them, but handling the rocblas
+# dependency is nontrivial.  So better not to copy-paste.
+# Look for Note [rocblas cmake bug]
 
-if(NOT NO_CUDA OR WITH_ROCM)
-  get_target_property(ATEN_CUDA_OUTPUT_NAME ATen_cuda LOCATION)
-  get_filename_component(ATEN_CUDA_OUTPUT_NAME ${ATEN_CUDA_OUTPUT_NAME} NAME)
+# Include CPU paths for CUDA/HIP as well
+list(APPEND ATen_CUDA_INCLUDE ${ATen_CPU_INCLUDE})
+list(APPEND ATen_HIP_INCLUDE ${ATen_CPU_INCLUDE})
+list(APPEND ATen_VULKAN_INCLUDE ${ATen_CPU_INCLUDE})
+
+# We have two libraries: libATen_cpu.so and libATen_cuda.so,
+# with libATen_cuda.so depending on libATen_cpu.so.  The CPU library
+# contains CPU code only.  libATen_cpu.so is invariant to the setting
+# of USE_CUDA (it always builds the same way); libATen_cuda.so is only
+# built when USE_CUDA=1 and CUDA is available.  (libATen_hip.so works
+# the same way as libATen_cuda.so)
+set(ATen_CPU_SRCS ${all_cpu_cpp})
+list(APPEND ATen_CPU_DEPENDENCY_LIBS ATEN_CPU_FILES_GEN_LIB)
+
+if(USE_CUDA)
+  set(ATen_CUDA_SRCS ${all_cuda_cpp})
+  set(ATen_NVRTC_STUB_SRCS ${cuda_nvrtc_stub_cpp})
+  list(APPEND ATen_CUDA_DEPENDENCY_LIBS ATEN_CUDA_FILES_GEN_LIB)
 endif()
 
-set(ATEN_LIBRARIES
-  "${CMAKE_INSTALL_PREFIX}/${AT_INSTALL_LIB_DIR}/${ATEN_CPU_OUTPUT_NAME}")
-
-if(NOT NO_CUDA)
-  set(ATEN_LIBRARIES
-    ${ATEN_LIBRARIES}
-    "${CMAKE_INSTALL_PREFIX}/${AT_INSTALL_LIB_DIR}/${ATEN_CUDA_OUTPUT_NAME}")
+if(USE_ROCM)
+  set(ATen_HIP_SRCS ${all_hip_cpp})
+  # caffe2_nvrtc's stubs to driver APIs are useful for HIP.
+  # See NOTE [ ATen NVRTC Stub and HIP ]
+  set(ATen_NVRTC_STUB_SRCS ${hip_nvrtc_stub_cpp})
+  # NB: Instead of adding it to this list, we add it by hand
+  # to caffe2_hip, because it needs to be a PRIVATE dependency
+  # list(APPEND ATen_HIP_DEPENDENCY_LIBS ATEN_CUDA_FILES_GEN_LIB)
 endif()
 
-SET(ATEN_INCLUDE_DIR "${CMAKE_INSTALL_PREFIX}/${AT_INSTALL_INCLUDE_DIR}")
-CONFIGURE_FILE(ATenConfig.cmake.in "${CMAKE_CURRENT_BINARY_DIR}/cmake-exports/ATenConfig.cmake")
-INSTALL(FILES "${CMAKE_CURRENT_BINARY_DIR}/cmake-exports/ATenConfig.cmake"
+set(ATEN_INCLUDE_DIR "${CMAKE_INSTALL_PREFIX}/${AT_INSTALL_INCLUDE_DIR}")
+configure_file(ATenConfig.cmake.in "${CMAKE_CURRENT_BINARY_DIR}/cmake-exports/ATenConfig.cmake")
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/cmake-exports/ATenConfig.cmake"
   DESTINATION "${AT_INSTALL_SHARE_DIR}/cmake/ATen")
 
+set(INSTALL_HEADERS ${base_h} ${ATen_CORE_HEADERS})
+if(NOT INTERN_BUILD_MOBILE)
+  list(APPEND INSTALL_HEADERS ${native_h} ${native_cpu_h} ${native_quantized_h} ${cuda_h} ${native_cuda_h} ${native_hip_h} ${cudnn_h} ${hip_h} ${miopen_h})
+endif()
+
 # https://stackoverflow.com/questions/11096471/how-can-i-install-a-hierarchy-of-files-using-cmake
-FOREACH(HEADER ${base_h})
-  GET_FILENAME_COMPONENT(DIR ${HEADER} DIRECTORY)
-  INSTALL(FILES ${HEADER} DESTINATION ${AT_INSTALL_INCLUDE_DIR}/ATen/${DIR})
-ENDFOREACH()
-FOREACH(HEADER ${generated_h} ${cuda_generated_h})
+foreach(HEADER  ${INSTALL_HEADERS})
+  string(REPLACE "${CMAKE_CURRENT_SOURCE_DIR}/" "ATen/" HEADER_SUB ${HEADER})
+  string(REPLACE "${${CMAKE_PROJECT_NAME}_SOURCE_DIR}/" "" HEADER_SUB ${HEADER_SUB})
+  get_filename_component(DIR ${HEADER_SUB} DIRECTORY)
+  install(FILES ${HEADER} DESTINATION "${AT_INSTALL_INCLUDE_DIR}/${DIR}")
+endforeach()
+
+# TODO: Install hip_generated_h when we have it
+foreach(HEADER ${generated_h} ${cuda_generated_h})
   # NB: Assumed to be flat
-  INSTALL(FILES ${CMAKE_CURRENT_BINARY_DIR}/${HEADER} DESTINATION ${AT_INSTALL_INCLUDE_DIR}/ATen)
-ENDFOREACH()
-FOREACH(HEADER ${cuda_h})
-  GET_FILENAME_COMPONENT(DIR ${HEADER} DIRECTORY)
-  INSTALL(FILES ${HEADER} DESTINATION ${AT_INSTALL_INCLUDE_DIR}/ATen/${DIR})
-ENDFOREACH()
-FOREACH(HEADER ${cudnn_h})
-  GET_FILENAME_COMPONENT(DIR ${HEADER} DIRECTORY)
-  INSTALL(FILES ${HEADER} DESTINATION ${AT_INSTALL_INCLUDE_DIR}/ATen/${DIR})
-ENDFOREACH()
-INSTALL(FILES ${CMAKE_CURRENT_BINARY_DIR}/ATen/Declarations.yaml
+  install(FILES ${HEADER} DESTINATION ${AT_INSTALL_INCLUDE_DIR}/ATen)
+endforeach()
+
+message("AT_INSTALL_INCLUDE_DIR ${AT_INSTALL_INCLUDE_DIR}/ATen/core")
+foreach(HEADER ${core_generated_h})
+  message("core header install: ${HEADER}")
+  install(FILES ${HEADER} DESTINATION ${AT_INSTALL_INCLUDE_DIR}/ATen/core)
+endforeach()
+
+install(FILES ${CMAKE_BINARY_DIR}/aten/src/ATen/Declarations.yaml
   DESTINATION ${AT_INSTALL_SHARE_DIR}/ATen)
+
+if(ATEN_NO_TEST)
+  message("disable test because ATEN_NO_TEST is set")
+else()
+  add_subdirectory(test)
+endif()
+
+list(APPEND ATen_MOBILE_BENCHMARK_SRCS
+  ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/tensor_add.cpp)
+list(APPEND ATen_MOBILE_BENCHMARK_SRCS
+  ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/stateful_conv1d.cpp)
+
+# Pass source, includes, and libs to parent
+set(ATen_CORE_SRCS ${ATen_CORE_SRCS} PARENT_SCOPE)
+set(ATen_CPU_SRCS ${ATen_CPU_SRCS} PARENT_SCOPE)
+set(ATen_CUDA_SRCS ${ATen_CUDA_SRCS} PARENT_SCOPE)
+set(ATen_CUDA_SRCS_W_SORT_BY_KEY ${ATen_CUDA_SRCS_W_SORT_BY_KEY} PARENT_SCOPE)
+set(ATen_NVRTC_STUB_SRCS ${ATen_NVRTC_STUB_SRCS} PARENT_SCOPE)
+set(ATen_HIP_SRCS ${ATen_HIP_SRCS} PARENT_SCOPE)
+set(ATen_QUANTIZED_SRCS ${ATen_QUANTIZED_SRCS} PARENT_SCOPE)
+set(ATen_CPU_TEST_SRCS ${ATen_CPU_TEST_SRCS} PARENT_SCOPE)
+set(ATen_CUDA_TEST_SRCS ${ATen_CUDA_TEST_SRCS} PARENT_SCOPE)
+set(ATen_CORE_TEST_SRCS ${ATen_CORE_TEST_SRCS} PARENT_SCOPE)
+set(ATen_HIP_TEST_SRCS ${ATen_HIP_TEST_SRCS} PARENT_SCOPE)
+set(ATen_VULKAN_TEST_SRCS ${ATen_VULKAN_TEST_SRCS} PARENT_SCOPE)
+set(ATen_MOBILE_BENCHMARK_SRCS ${ATen_MOBILE_BENCHMARK_SRCS} PARENT_SCOPE)
+set(ATen_MOBILE_TEST_SRCS ${ATen_MOBILE_TEST_SRCS} ${ATen_VULKAN_TEST_SRCS} PARENT_SCOPE)
+set(ATen_VEC256_TEST_SRCS  ${ATen_VEC256_TEST_SRCS} PARENT_SCOPE)
+set(ATen_QUANTIZED_TEST_SRCS ${ATen_QUANTIZED_TEST_SRCS} PARENT_SCOPE)
+set(ATen_CPU_INCLUDE ${ATen_CPU_INCLUDE} PARENT_SCOPE)
+set(ATen_THIRD_PARTY_INCLUDE ${ATen_THIRD_PARTY_INCLUDE} PARENT_SCOPE)
+set(ATen_CUDA_INCLUDE ${ATen_CUDA_INCLUDE} PARENT_SCOPE)
+set(ATen_HIP_INCLUDE ${ATen_HIP_INCLUDE} PARENT_SCOPE)
+set(ATen_VULKAN_INCLUDE ${ATen_VULKAN_INCLUDE} PARENT_SCOPE)
+set(ATen_CPU_DEPENDENCY_LIBS ${ATen_CPU_DEPENDENCY_LIBS} PARENT_SCOPE)
+set(ATen_CUDA_DEPENDENCY_LIBS ${ATen_CUDA_DEPENDENCY_LIBS} PARENT_SCOPE)
+set(ATen_HIP_DEPENDENCY_LIBS ${ATen_HIP_DEPENDENCY_LIBS} PARENT_SCOPE)

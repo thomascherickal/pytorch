@@ -18,7 +18,9 @@ fi
 
 # Use ccache if available (this path is where Homebrew installs ccache symlinks)
 if [ "$(uname)" == 'Darwin' ]; then
-  CCACHE_WRAPPER_PATH=/usr/local/opt/ccache/libexec
+  if [ -n "${CCACHE_WRAPPER_PATH:-}"]; then
+    CCACHE_WRAPPER_PATH=/usr/local/opt/ccache/libexec
+  fi
   if [ -d "$CCACHE_WRAPPER_PATH" ]; then
     CMAKE_ARGS+=("-DCMAKE_C_COMPILER=$CCACHE_WRAPPER_PATH/gcc")
     CMAKE_ARGS+=("-DCMAKE_CXX_COMPILER=$CCACHE_WRAPPER_PATH/g++")
@@ -31,6 +33,18 @@ if [ -n "${USE_ANACONDA}" ]; then
   export CONDA_INSTALL_LOCALLY=1
   "${ROOT_DIR}/scripts/build_anaconda.sh" "$@"
 else
+  # Make sure that pyyaml is installed for the codegen of building Aten to work
+  if [[ -n "$(python -c 'import yaml' 2>&1)" ]]; then
+    echo "Installing pyyaml with pip at $(which pip)"
+    pip install --user pyyaml
+  fi
+
+  # Make sure that typing is installed for the codegen of building Aten to work
+  if [[ -n "$(python -c 'import typing' 2>&1)" ]]; then
+    echo "Installing typing with pip at $(which pip)"
+    pip install --user typing
+  fi
+
   # Build protobuf compiler from third_party if configured to do so
   if [ -n "${USE_HOST_PROTOC:-}" ]; then
     echo "USE_HOST_PROTOC is set; building protoc before building Caffe2..."
@@ -53,7 +67,9 @@ else
 
   # Determine the number of CPUs to build with.
   # If the `CAFFE_MAKE_NCPUS` variable is not specified, use them all.
-  if [ -n "${CAFFE_MAKE_NCPUS}" ]; then
+  if [ -n "${MAX_JOBS}" ]; then
+      CAFFE_MAKE_NCPUS="$MAX_JOBS"
+  elif [ -n "${CAFFE_MAKE_NCPUS}" ]; then
       CAFFE_MAKE_NCPUS="$CAFFE_MAKE_NCPUS"
   elif [ "$(uname)" == 'Darwin' ]; then
       CAFFE_MAKE_NCPUS="$(sysctl -n hw.ncpu)"

@@ -19,8 +19,8 @@
 # (2) When we are not building with the main repo, we will need to do the usual
 #     cmake setup: version checks, project options, find dependent packages,
 #     etc.
-if (CAFFE2_CMAKE_BUILDING_WITH_MAIN_REPO)
-  if (NOT USE_ROCKSDB)
+if(CAFFE2_CMAKE_BUILDING_WITH_MAIN_REPO)
+  if(NOT USE_ROCKSDB)
     return()
   endif()
 else()
@@ -37,12 +37,18 @@ endif()
 # cmake. Note that for modules that are located in the Caffe2 repository,
 # cmake related files, such as FindRocksDB in this case, should live in the
 # cmake/ folder under root.
-find_package(RocksDB)
-if(NOT ROCKSDB_FOUND)
-  message(
-     FATAL_ERROR
-     "RocksDB not found. If you do not need caffe2_rocksdb, set "
-     "-DUSE_ROCKSDB=OFF to solve this error.")
+find_package(RocksDB CONFIG)
+if((DEFINED RocksDB_DIR) AND RocksDB_DIR)
+  list(APPEND RocksDB_LIBRARIES RocksDB::rocksdb)
+else()
+  message("RocksDB config not found. Fallback to legacy find.")
+  find_package(RocksDB)
+  if(NOT ROCKSDB_FOUND)
+    message(
+       FATAL_ERROR
+       "RocksDB not found. If you do not need caffe2_rocksdb, set "
+       "-DUSE_ROCKSDB=OFF to solve this error.")
+  endif()
 endif()
 
 # ---[ Third, create the CMake target.
@@ -50,12 +56,12 @@ endif()
 # which is the main lib of Caffe2. If your library explicitly depends on cuda,
 # then you will need to depend on the caffe2_gpu_library as well.
 add_library(caffe2_rocksdb ${CMAKE_CURRENT_SOURCE_DIR}/rocksdb.cc)
-target_link_libraries(caffe2_rocksdb PUBLIC caffe2_library)
+target_link_libraries(caffe2_rocksdb PUBLIC torch_library)
 target_link_libraries(caffe2_rocksdb PRIVATE ${RocksDB_LIBRARIES})
 target_include_directories(caffe2_rocksdb PRIVATE ${RocksDB_INCLUDE_DIR})
 install(TARGETS caffe2_rocksdb DESTINATION lib)
 
-# ---[ Last, Append the library to Caffe2_MAIN_LIBS, if we are building with
+# ---[ Last, Append the library to Caffe2_MODULES, if we are building with
 # the main repo.
 # The purpose of this is that, for all binaries built in the Caffe2 main repo,
 # they will be built with the first class modules that are built. As a result,
@@ -63,6 +69,6 @@ install(TARGETS caffe2_rocksdb DESTINATION lib)
 # them.
 # Note(jiayq): this also depends on a separate cmake move to reorg test builds
 # and binary builds after modules. When it is done, this note should be removed.
-if (CAFFE2_CMAKE_BUILDING_WITH_MAIN_REPO)
+if(CAFFE2_CMAKE_BUILDING_WITH_MAIN_REPO)
   set(Caffe2_MODULES ${Caffe2_MODULES} caffe2_rocksdb PARENT_SCOPE)
 endif()

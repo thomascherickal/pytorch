@@ -1,15 +1,17 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
-import numpy as np
+
+
+
+
+
 from caffe2.python import core
 from caffe2.python.test_util import rand_array
 import caffe2.python.hypothesis_test_util as hu
-from hypothesis import given
+import caffe2.python.serialized_test.serialized_test_util as serial
+from hypothesis import given, settings
 import hypothesis.strategies as st
+import numpy as np
 
-class TestScatterOps(hu.HypothesisTestCase):
+class TestScatterOps(serial.SerializedTestCase):
     # TODO(dzhulgakov): add test cases for failure scenarios
     @given(num_args=st.integers(1, 5),
            first_dim=st.integers(1, 20),
@@ -17,6 +19,7 @@ class TestScatterOps(hu.HypothesisTestCase):
            extra_dims=st.lists(st.integers(1, 4), min_size=0, max_size=3),
            ind_type=st.sampled_from([np.int32, np.int64]),
            **hu.gcs)
+    @settings(deadline=10000)
     def testScatterWeightedSum(
         self, num_args, first_dim, index_dim, extra_dims, ind_type, gc, dc):
         ins = ['data', 'w0', 'indices']
@@ -41,7 +44,7 @@ class TestScatterOps(hu.HypothesisTestCase):
         d = rand_array(first_dim, *extra_dims)
         ind = np.random.randint(0, first_dim, index_dim).astype(ind_type)
         # ScatterWeightedSumOp only supports w0=1.0 in CUDAContext
-        if(gc == hu.gpu_do):
+        if(gc == hu.gpu_do or gc == hu.hip_do):
             w0 = np.array(1.0).astype(np.float32)
         else:
             w0 = rand_array()
@@ -58,6 +61,7 @@ class TestScatterOps(hu.HypothesisTestCase):
            data_type=st.sampled_from([np.float16, np.float32, np.int32, np.int64]),
            ind_type=st.sampled_from([np.int32, np.int64]),
            **hu.gcs)
+    @settings(deadline=10000)
     def testScatterAssign(
             self, first_dim, index_dim, extra_dims, data_type, ind_type, gc, dc):
         op = core.CreateOperator('ScatterAssign',
@@ -74,7 +78,7 @@ class TestScatterOps(hu.HypothesisTestCase):
         ind = np.random.choice(first_dim, index_dim,
                                replace=False).astype(ind_type)
         x = (rand_array(index_dim, *extra_dims) * 10).astype(data_type)
-        self.assertReferenceChecks(gc, op, [d, ind, x], ref, threshold=1e-3)
+        self.assertReferenceChecks(gc, op, [d, ind, x], ref, threshold=1e-3, ensure_outputs_are_inferred=True)
 
 if __name__ == "__main__":
     import unittest

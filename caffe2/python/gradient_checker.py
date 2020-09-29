@@ -1,14 +1,19 @@
 ## @package gradient_checker
 # Module caffe2.python.gradient_checker
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
+
+
+
+
 
 import numpy as np
 
 from caffe2.python import core, workspace, net_drawer
 from caffe2.proto import caffe2_pb2
+
+
+def getGradientForOp(op):
+    return core.GradientRegistry.GetGradientForOp(
+        op, [s + '_grad' for s in op.output])
 
 
 def _get_grad_blob(grad_map, input_to_check):
@@ -76,7 +81,7 @@ class NetGradientChecker(object):
                 png = net_drawer.GetPydotGraph(net).create_png()
                 with open("caffe2_net_forward_" + str(i) + net.Name() + ".png",
                           'wb') \
-                     as f:
+                        as f:
                     f.write(png)
 
         results = [
@@ -91,7 +96,7 @@ class NetGradientChecker(object):
             for i, net in enumerate(backward_nets):
                 png = net_drawer.GetPydotGraph(net).create_png()
                 with open("caffe2_net_" + str(i) + net.Name() + ".png", 'wb') \
-                     as f:
+                        as f:
                     f.write(png)
 
         first_net_results, first_net_grads, _ = results[0]
@@ -146,6 +151,7 @@ class NetGradientChecker(object):
 
         return _assert_close(analytic_grad, grad_estimate, threshold, err_msg)
 
+
 class GradientChecker:
     """A gradient checker in Python.
 
@@ -159,19 +165,27 @@ class GradientChecker:
         stepsize,
         threshold,
         device_option=None,
-        workspace_name="gradient_check"
+        workspace_name="gradient_check",
+        input_device_options=None,
     ):
         self._stepsize = stepsize
         self._threshold = threshold
         self._device_option = device_option or caffe2_pb2.DeviceOption()
         self._workspace_name = workspace_name
+        if input_device_options is None:
+            self._input_device_options = {}
+        else:
+            self._input_device_options = input_device_options
 
     def GetLossAndGrad(
-        self, op, grad_ops, x, input_name, grad_name, outputs_with_grads
+        self, op, grad_ops, inputs, input_names, input_to_check, grad_name,
+        outputs_with_grads
     ):
-        # First, feed in the current input. Note that we are not changing
-        # anything else, so we don't need to feed in others.
-        workspace.FeedBlob(input_name, x, self._device_option)
+        for i in range(len(inputs)):
+            workspace.FeedBlob(input_names[i], inputs[i],
+                               self._input_device_options.get(
+                input_names[i], self._device_option))
+        x = inputs[input_to_check]
         # Run.
         workspace.RunOperatorOnce(op)
         loss = 0.
@@ -219,7 +233,8 @@ class GradientChecker:
         input_to_check,
         outputs_with_grads,
         grad_ops=None,
-        input_device_options=None
+        input_device_options=None,
+        ensure_outputs_are_inferred=False,
     ):
         """Checks the operator in a very simple fashion by stacking a sum of
         squares on the top.
@@ -236,6 +251,8 @@ class GradientChecker:
               gradient operator from the gradient registry.
           input_device_options: an optional mapping from input names to
               DeviceOptions (to override the default DeviceOption)
+          ensure_outputs_are_inferred: if set will assert that the gradient output
+              shapes matches the inferred shapes
         Outputs:
           boolean: True if it passes, False if it does not pass.
         """
@@ -248,10 +265,9 @@ class GradientChecker:
         if grad_ops is None:
             # TODO(jiayq): use the gradient registration instead of the old
             # hack.
-            grad_ops, g_input = core.GradientRegistry.GetGradientForOp(
-                op, [s + '_grad' for s in op.output])
+            grad_ops, g_input = getGradientForOp(op)
 
-        dims_to_check = inputs[input_to_check].size
+
         _input_device_options = input_device_options or \
             core.InferOpBlobDevicesAsDict(op)[0]
         # First, feed in the input.
@@ -262,11 +278,10 @@ class GradientChecker:
                     op.input[i], self._device_option))
 
         # Get the loss and gradient for the original.
-        input_name = op.input[input_to_check]
         grad_name = g_input[input_to_check]
         loss, grad = self.GetLossAndGrad(
-            op, grad_ops, inputs[input_to_check], input_name, grad_name,
-            outputs_with_grads
+            op, grad_ops, inputs, op.input, input_to_check, grad_name,
+            outputs_with_grads,
         )
         grad_estimate = np.zeros_like(inputs[input_to_check])
         if grad_estimate.shape != grad.shape:
@@ -274,18 +289,22 @@ class GradientChecker:
                 "Mismatched gradient shapes: estimated ({}), grad ({})".format(
                     grad_estimate.shape, grad.shape))
 
+        if ensure_outputs_are_inferred:
+            self._assertInferTensorChecks(op, grad_ops)
+
+        dims_to_check = inputs[input_to_check].size
         for current_dim in range(dims_to_check):
             # Positive gradient
             inputs[input_to_check].flat[current_dim] += self._stepsize
             pos_loss, _ = self.GetLossAndGrad(
-                op, grad_ops, inputs[input_to_check], input_name,
-                grad_name, outputs_with_grads
+                op, grad_ops, inputs, op.input, input_to_check, grad_name,
+                outputs_with_grads
             )
             # Negative gradient
             inputs[input_to_check].flat[current_dim] -= self._stepsize * 2
             neg_loss, _ = self.GetLossAndGrad(
-                op, grad_ops, inputs[input_to_check], input_name,
-                grad_name, outputs_with_grads
+                op, grad_ops, inputs, op.input, input_to_check, grad_name,
+                outputs_with_grads
             )
             # Recover the value
             inputs[input_to_check].flat[current_dim] += self._stepsize
@@ -309,3 +328,47 @@ class GradientChecker:
             workspace.ResetWorkspace()
             workspace.SwitchWorkspace(old_ws_name)
         return ret, grad, grad_estimate
+
+    def _assertInferTensorChecks(self, op, grad_ops):
+        tmp_net = caffe2_pb2.NetDef()
+        tmp_net.op.extend([op])
+        tmp_net.op.extend(grad_ops)
+        inferred_shapes, inferred_types = workspace.InferShapesAndTypes(
+            [tmp_net],
+            nets_proto=True,
+        )
+
+        outputs = set()
+        for grad_op in grad_ops:
+            outputs.update(grad_op.output)
+
+        for output in outputs:
+            if output not in inferred_shapes:
+                raise Exception(
+                    "expected output {} to be inferred".format(output))
+            blob = workspace.FetchBlob(output)
+            correct_shape = list(blob.shape)
+            inferred_shape = list(inferred_shapes[output])
+            if correct_shape != inferred_shape:
+                raise Exception(
+                    "Mismatched inferred shape: want({}), got({})".format(
+                        correct_shape, inferred_shape))
+
+            if type(blob) is np.ndarray:
+                if blob.dtype == np.dtype('float64'):
+                    correct_type = caffe2_pb2.TensorProto.DOUBLE
+                elif blob.dtype == np.dtype('float32'):
+                    correct_type = caffe2_pb2.TensorProto.FLOAT
+                elif blob.dtype == np.dtype('int32'):
+                    correct_type = caffe2_pb2.TensorProto.INT32
+                elif blob.dtype == np.dtype('int64'):
+                    correct_type = caffe2_pb2.TensorProto.INT64
+                else:
+                    correct_type = "unknown {}".format(np.dtype)
+            else:
+                correct_type = str(type(blob))
+            inferred_type = inferred_types[output]
+            if correct_type != inferred_type:
+                raise Exception(
+                    "Mismatched inferred type: want({}), got({})".format(
+                        correct_type, inferred_type))

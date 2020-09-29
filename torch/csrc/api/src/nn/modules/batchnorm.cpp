@@ -1,61 +1,53 @@
+#include <torch/nn/functional/batchnorm.h>
 #include <torch/nn/modules/batchnorm.h>
 
-#include <cstdint>
+#include <torch/cuda.h>
+#include <torch/types.h>
+
+#include <c10/util/Exception.h>
+
+#include <cstddef>
+#include <ostream>
+#include <utility>
+#include <vector>
+
+namespace F = torch::nn::functional;
 
 namespace torch {
 namespace nn {
 
-BatchNorm::BatchNorm(int64_t features) : features_(features) {}
-
-void BatchNorm::reset() {
-  if (affine_) {
-    register_parameter(
-        "weight",
-        &BatchNorm::weight_,
-        at::CPU(at::kFloat).empty({features_}).uniform_());
-    register_parameter(
-        "bias", &BatchNorm::bias_, at::CPU(at::kFloat).zeros({features_}));
-  }
-
-  if (stateful_) {
-    // TODO: create distinction between parameters and buffers and make these
-    // gradient-less buffers
-    register_buffer(
-        "running_mean",
-        &BatchNorm::running_mean_,
-        at::CPU(at::kFloat).zeros({features_}));
-    register_buffer(
-        "running_variance",
-        &BatchNorm::running_variance_,
-        at::CPU(at::kFloat).ones({features_}));
-  }
+template <size_t D, typename Derived> 
+void BatchNormImplBase<D, Derived>::pretty_print(std::ostream& stream) const {
+  stream << std::boolalpha
+         << "torch::nn::BatchNorm" << D << "d("
+         << this->options.num_features() << ", "
+         << "eps=" << this->options.eps() << ", "
+         << "momentum=" << this->options.momentum().value() << ", "
+         << "affine=" << this->options.affine() << ", "
+         << "track_running_stats=" << this->options.track_running_stats() << ")";
 }
 
-variable_list BatchNorm::forward(variable_list inputs) {
-  auto& input = inputs[0];
-  auto& running_mean_ = (stateful_ ? this->running_mean_ : inputs[1]);
-  auto& running_variance_ = (stateful_ ? this->running_variance_ : inputs[2]);
-
-  if (is_training()) {
-    const auto num_channels = input.dim() > 1 ? input.size(1) : 1;
-    if (input.numel() / num_channels <= 1) {
-      throw std::runtime_error(
-          "BatchNorm expected more than 1 value per channel when training!");
-    }
-  }
-
-  auto output = at::batch_norm(
-      input,
-      weight_,
-      bias_,
-      running_mean_,
-      running_variance_,
-      is_training(),
-      momentum_,
-      eps_,
-      hasCudnn());
-
-  return variable_list({output});
+void BatchNorm1dImpl::_check_input_dim(const Tensor& input) {
+  TORCH_CHECK(
+      input.dim() == 2 || input.dim() == 3,
+      "expected 2D or 3D input (got ", input.dim(), "D input)");
 }
+
+void BatchNorm2dImpl::_check_input_dim(const Tensor& input) {
+  TORCH_CHECK(
+      input.dim() == 4,
+      "expected 4D input (got ", input.dim(), "D input)");
+}
+
+void BatchNorm3dImpl::_check_input_dim(const Tensor& input) {
+  TORCH_CHECK(
+      input.dim() == 5,
+      "expected 5D input (got ", input.dim(), "D input)");
+}
+
+template class BatchNormImplBase<1, BatchNorm1dImpl>;
+template class BatchNormImplBase<2, BatchNorm2dImpl>;
+template class BatchNormImplBase<3, BatchNorm3dImpl>;
+
 } // namespace nn
 } // namespace torch

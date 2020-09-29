@@ -1,9 +1,9 @@
 ## @package checkpoint
 # Module caffe2.python.checkpoint
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
+
+
+
+
 
 import os
 import logging
@@ -19,7 +19,7 @@ from caffe2.python.task import (
 )
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+
 
 
 @context.define_context()
@@ -159,6 +159,9 @@ class CheckpointManager(object):
         metadata_handler: An optional object capable of reading/writing
             checkpoint info in storage of choice.
     """
+
+    BLOB_NAMES = "blob_names"
+
     def __init__(self, db_prefix, node_name, db_type, metadata_handler=None):
         self._db_prefix = db_prefix
         self._node_name = node_name
@@ -166,7 +169,7 @@ class CheckpointManager(object):
         self._metadata_handler = metadata_handler
         # make sure these blobs are the first in the checkpoint file.
         self._net = core.Net('!!checkpoint_mngr')
-        self._blob_names = self._net.AddExternalInput('blob_names')
+        self._blob_names = self._net.AddExternalInput(self.BLOB_NAMES)
         self._names_output = None
         self._path_prefix = None
         self._path_type = None
@@ -217,7 +220,9 @@ class CheckpointManager(object):
                     [], self._blob_names,
                     db=full_db_name,
                     db_type=db_type,
-                    absolute_path=True)
+                    absolute_path=True,
+                    keep_device=True,
+                )
         self._names_output = task.outputs()[0]
         return task
 
@@ -280,7 +285,9 @@ class CheckpointManager(object):
                 self.blob_list(),
                 db=self._current_db_name,
                 db_type=db_type,
-                absolute_path=True)
+                absolute_path=True,
+                keep_device=True,
+            )
 
         return self._timed_task('checkpoint_load', add_op)
 
@@ -375,7 +382,7 @@ class CheckpointManager(object):
         Args:
             user_epoch: An integer. Optional parameter for user to explicitly
                 identify the epoch-id to load checkpoint from
-        Retruns:
+        Returns:
             epoch: the epoch-id to load checkpoints from
                 or None if no checkpoints were written
         """
@@ -579,7 +586,7 @@ class MultiNodeCheckpointManager(object):
         Args:
             user_epoch: An integer. Optional parameter for user to explicitly
                 identify the epoch-id to load checkpoint from
-        Retruns:
+        Returns:
             epoch: the epoch-id to load checkpoints from
                 or None if no checkpoints were written
         """

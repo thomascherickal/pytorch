@@ -1,9 +1,24 @@
+# Copyright (c) 2016-present, Facebook, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+##############################################################################
+
 ## @package convnet_benchmarks
 # Module caffe2.experiments.python.convnet_benchmarks
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
+
+
+
+
 """
 Benchmark for common convnets.
 
@@ -69,7 +84,7 @@ import time
 
 from caffe2.python import cnn, workspace, core
 
-import caffe2.python.SparseTransformer as SparseTransformer
+import caffe2.python.SparseTransformer as SparseTransformer  # type: ignore[import]
 
 
 def MLP(order):
@@ -589,8 +604,7 @@ def Benchmark(model_gen, arg):
             "{0}_init_batch_{1}.pbtxt".format(arg.model, arg.batch_size), "w"
         ) as fid:
             fid.write(str(model.param_init_net.Proto()))
-            with open("{0}.pbtxt".format(arg.model,
-                                         arg.batch_size), "w") as fid:
+            with open("{0}.pbtxt".format(arg.model), "w") as fid:
                 fid.write(str(model.net.Proto()))
 
     workspace.RunNetOnce(model.param_init_net)

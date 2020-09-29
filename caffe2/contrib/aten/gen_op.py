@@ -20,6 +20,7 @@ import yaml
 import argparse
 import os
 from copy import deepcopy
+from typing import Dict, List
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--template_dir", default=".", help="where template.h is")
@@ -35,10 +36,10 @@ if args.aten_root:
     if not os.path.exists(args.aten_root):
         raise ValueError('aten_root ({}) does not exist'.format(
             args.aten_root))
-    sys.path.append(os.path.join(args.aten_root, 'src', 'ATen'))
-    from code_template import CodeTemplate as CT
+    sys.path.append(os.path.join(args.aten_root, '..'))  # TODO: fix this
+    from tools.codegen.code_template import CodeTemplate as CT
 else:
-    from src.ATen.code_template import CodeTemplate as CT
+    from tools.codegen.code_template import CodeTemplate as CT  # type: ignore[import,no-redef]
 
 OP_TEMPLATE = CT.from_file(
     os.path.join(args.template_dir, 'aten_op_template.h'))
@@ -48,7 +49,7 @@ try:
     # use faster C loader if available
     from yaml import CLoader as Loader
 except ImportError:
-    from yaml import Loader
+    from yaml import Loader  # type: ignore[misc]
 
 
 def write(filename, s):
@@ -73,7 +74,7 @@ def value_is_tensor_type(v):
 # for each aten type, how do we handle a return value of that type?
 RETURN_MAP = {
     'Tensor': 'assignTo(Output(${offset}),${output});',
-    'Scalar': 'assignTo(Output(${offset}),*inferred_type, ${output});',
+    'Scalar': 'assignTo(Output(${offset}),${output}.type(), ${output});',
     'bool': 'assignToValue<int64_t>(Output(${offset}),${output});',
     'int64_t': 'assignToValue<int64_t>(Output(${offset}),${output});',
     'std::vector<Tensor>': 'assignListStartingAt(${offset}, ${output});',
@@ -88,11 +89,16 @@ ARGUMENT_MAP = {
     'int': 'int ${arg} = readAttribute<int64_t>("${arg}");',
     'double': 'double ${arg} = readAttribute<float>("${arg}");',
     'int64_t': 'int64_t ${arg} = readAttribute<int64_t>("${arg}");',
-    'IntList': 'auto ${arg} = readIntList("${arg}");',
-    'std::array<bool, 2>': 'auto ${arg} = readBoolMask<2>("${arg}");',
-    'std::array<bool, 3>': 'auto ${arg} = readBoolMask<3>("${arg}");',
+    'IntArrayRef': 'auto ${arg} = readIntArrayRef("${arg}");',
+    'std::array<bool,2>': 'auto ${arg} = readBoolMask<2>("${arg}");',
+    'std::array<bool,3>': 'auto ${arg} = readBoolMask<3>("${arg}");',
 }
 
+# for BC reasons we want to route some of the functions to different
+# implementations
+SPECIAL_IMPLEMENTATIONS = {
+    'index': 'internal::index_with_uint8_handling',
+}
 
 def expand(o):
     num_defaults = sum(1 if 'default' in arg else 0 for arg in o['arguments'])
@@ -107,7 +113,14 @@ def expand(o):
 
 
 # filter the list of declarations removing things we cannot support
-def supports(o):
+def supports(o, factory_methods):
+    # Ignore all families (!) of functions that have TensorOptions (i.e. tensor factory methods).
+    if o['name'] in factory_methods:
+        if factory_methods[o['name']] == 0:
+            print("Skipping {} because it is a factory method".format(o['name']))
+        factory_methods[o['name']] += 1
+        return False
+
     # skip all in-place operators for now since aten cannot Resize
     # caffe2 memory inside an operator
     if o['inplace']:
@@ -116,6 +129,10 @@ def supports(o):
     # _out variants also work in-place on arguments taken as destinations
     # we also cannot handle these because aten cannot resize caffe2 Tensors
     if "_out" in o['name']:
+        return False
+
+    # skip if no return, previously it is 'void'
+    if len(o['returns']) == 0:
         return False
 
     # skip return types we cannot handle
@@ -140,16 +157,31 @@ def supports(o):
 # non-tensor attributes are created in ${initialization}
 # and then saved as arguments to the lambda
 # Inputs/Outputs are read inside the lambda
-OPTION_TEMPLATE = CT("""\
-case ${key}: { // ${name}
+#
+# each implementation is defined in a separate method annotated with
+# C10_NOINLINE to avoid inlining into the ATenOp constructor, which would
+# trigger pathological compile times.
+IMPLEMENTATION_TEMPLATE = CT("""\
+C10_NOINLINE void implementation_${key}() { // ${name}
     ${initialization}
     run_op = [=] {
+        at::AutoNonVariableTypeMode guard;
         ${statements}
         auto the_result = ${invocation};
         ${assignments}
         return true;
     };
-} break;
+}
+""")
+
+CASE_TEMPLATE = CT("""\
+case ${key}: // ${name}
+  implementation_${key}();
+  break;
+""")
+
+ASSIGN_CHECK_SIZE_TEMPLATE = CT("""\
+  if(OutputSize() > ${offset}) {${assignment}}
 """)
 
 
@@ -183,13 +215,32 @@ def get_num_inputs(o):
     return str(args)
 
 
+def find_factory_methods(decls):
+    factory_methods = {}
+    for o in decls:
+        if any(arg['dynamic_type'] == 'TensorOptions' for arg in o['arguments']):
+            factory_methods[o['name']] = 0
+    return factory_methods
+
+
+def emit_assignments(o, env):
+    for i, r in enumerate(o['returns']):
+        t = RETURN_MAP[r['type'] if not value_is_tensor_type(r) else 'Tensor']
+        assignment = CT(t).substitute(env, offset=i, output=get_output(o, i))
+        check_size_assignment = ASSIGN_CHECK_SIZE_TEMPLATE.substitute(env, offset=i, assignment=assignment)
+
+        env['assignments'].append(check_size_assignment)
+
+
 if __name__ == '__main__':
     decls = yaml.load(read(os.path.join(args.yaml_dir, 'Declarations.yaml')), Loader=Loader)
-    filtered = [expanded for o in decls for expanded in expand(o) if supports(expanded)]
+    factory_methods = find_factory_methods(decls)
+    filtered = [expanded for o in decls for expanded in expand(o) if supports(expanded, factory_methods)]
     top_env = {
         'mappings': [],
         'implementations': [],
-    }
+        'cases': [],
+    }  # type: Dict[str, List]
     seen = set()
     key = 0
     for o in filtered:
@@ -219,59 +270,51 @@ if __name__ == '__main__':
             'initialization': [],
             'key': str(key),
         }
-        defined_inferred_type = False
 
-        if 'Tensor' in o['method_of']:
-            # make sure 'self' is the first argument. currently Declarations.yaml
-            # does not always do this. Instead it keeps the argument list the same order
-            # as the Type method.
-            o['arguments'] = self_as_first_argument(o['arguments'])
-        elif 'namespace' not in o['method_of']:
+        if 'namespace' not in o['method_of'] and 'Tensor' not in o['method_of']:
             # methods on type like 'ones' or 'zeros' always take a
             # string attribute that is translated into the at::Type object
             # e.g. "Float" is at::kFloat
             assert('Type' in o['method_of'])
-            defined_inferred_type = True
-            env['initialization'].append(
-                'auto inferred_type = readTypeAttribute("type");')
 
-        i = 0
-        for arg in o['arguments']:
+        static_tensor_inputs = sum(arg['type'] != 'TensorList' and value_is_tensor_type(arg) for arg in o['arguments'])
+        has_tensorlist = any(arg['type'] == 'TensorList' for arg in o['arguments'])
+        if has_tensorlist:
+            tensorlist_idx = [i for i, arg in enumerate(o['arguments']) if arg['type'] == 'TensorList'][0]
+
+        real_inputs = 0
+        for i, arg in enumerate(o['arguments']):
             env['arguments'].append(arg['name'])
+            # Emulate logic in gen_unboxing_wrappers.py. Pretend the flat argument
+            # list is a stack where the end is the top.
+            view_length = 'InputSize()' if has_tensorlist and i < tensorlist_idx else static_tensor_inputs
             if arg['type'] == 'TensorList':
+                # NOTE: do not advance real_inputs here. After this we will
+                # switch to indexing the "stack" from the end as if we only had
                 env['statements'].append(
-                    'auto {} = loadInputsAtOffset({});'.format(arg['name'], i))
+                    'auto {} = peekSlice({}, InputSize() - {}, InputSize());'
+                    .format(arg['name'], real_inputs, static_tensor_inputs))
             elif value_is_tensor_type(arg):
-                assert(i != '*')  # tensor list is not last argument
                 # load tensor inputs from Caffe2
                 env['statements'].append(
-                    "auto {} = loadInput({});".format(arg['name'], i))
-                i += 1
-                if arg['dynamic_type'] == 'Tensor' and not defined_inferred_type:
-                    # first tensor input is used to define the output type.
-                    defined_inferred_type = True
-                    env['statements'].append(
-                        'auto inferred_type = &({}.type());'.format(
-                            arg['name']))
+                    'auto {} = peek({}, {});'.format(arg['name'], real_inputs, view_length))
+                real_inputs += 1
             else:
                 init = CT(ARGUMENT_MAP[arg['type']]).substitute(env, arg=arg['name'])
                 env['initialization'].append(init)
 
-        for i, r in enumerate(o['returns']):
-            t = RETURN_MAP[r['type'] if not value_is_tensor_type(r) else 'Tensor']
-            assignment = CT(t).substitute(env, offset=i, output=get_output(o, i))
-            env['assignments'].append(assignment)
+        emit_assignments(o, env)
 
-        if 'Tensor' in o['method_of']:
-            env['invocation'] = "self.{}({})".format(
-                o['name'], ', '.join(env['arguments'][1:]))
+        if o['name'] in SPECIAL_IMPLEMENTATIONS:
+            env['invocation'] = "{}({})".format(SPECIAL_IMPLEMENTATIONS[o['name']], ','.join(env['arguments']))
         elif 'namespace' in o['method_of']:
             env['invocation'] = CT("at::${name}(${arguments})").substitute(env)
         else:
-            assert('Type' in o['method_of'])
-            env['invocation'] = CT(
-                'inferred_type->${name}(${arguments})').substitute(env)
+            assert('Tensor' in o['method_of'])
+            env['invocation'] = "self.{}({})".format(
+                o['name'], ', '.join(env['arguments'][1:]))
 
-        top_env['implementations'].append(OPTION_TEMPLATE.substitute(env))
+        top_env['implementations'].append(IMPLEMENTATION_TEMPLATE.substitute(env))
+        top_env['cases'].append(CASE_TEMPLATE.substitute(env))
         key += 1
     write(os.path.join(args.install_dir, args.output_prefix + "aten_op.h"), OP_TEMPLATE.substitute(top_env))
